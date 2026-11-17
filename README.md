@@ -1,9 +1,11 @@
-// ==WindhawkModReadme==
-/*
-# Taskbar System Monitor
+<img width="2605" height="1095" alt="image" src="https://github.com/user-attachments/assets/b729e4af-61b8-44be-b291-fa06890d91bf" /># Taskbar System Monitor
 
 Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network,
 battery, temperatures and more. Click a reading for details.
+
+![Taskbar widget and details panel demo](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif)
+
+![Taskbar System Monitor settings preview](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif)
 
 ## Quick start
 
