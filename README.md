@@ -3,10 +3,13 @@
 Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network,
 battery, temperatures and more. Click a reading for details.
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif" height="260" alt="Taskbar widget and details panel demo" />
-  <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif" height="260" alt="Taskbar System Monitor settings preview" />
-</p>
+| Taskbar & Details Panel | Settings Window |
+| :---: | :---: |
+| <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif" height="220" alt="Taskbar widget and details panel demo" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif" height="220" alt="Settings window preview" /> |
+
+| Preset Switching | Zone Drag-and-Drop Editor | Widgets Overview |
+| :---: | :---: | :---: |
+| <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/3-preset-preview.gif" height="170" alt="Preset preview" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/4-editing-panel.gif" height="170" alt="Editing panel" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/5-widgets.gif" height="170" alt="Widgets overview" /> |
 
 ## Quick start
 
