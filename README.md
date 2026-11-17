@@ -1,4 +1,4 @@
-<img width="2605" height="1095" alt="image" src="https://github.com/user-attachments/assets/b729e4af-61b8-44be-b291-fa06890d91bf" /># Taskbar System Monitor
+# Taskbar System Monitor
 
 Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network,
 battery, temperatures and more. Click a reading for details.
