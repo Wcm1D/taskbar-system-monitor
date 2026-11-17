@@ -161,5 +161,3 @@ ASUS fan readings use the values found by
 
 Released under [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html), like
 the original.
-*/
-// ==/WindhawkModReadme==
