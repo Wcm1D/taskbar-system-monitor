@@ -4,15 +4,15 @@ Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network,
 battery, temperatures and more. Click a reading for details.
 
 ### Preset Switching
-![Preset switching on the taskbar](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/3-preset-preview.gif)
+<img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/assets/taskbar-preset-preview.gif" width="100%" alt="Preset switching on the taskbar" />
 
 | Taskbar & Details Panel | Settings Window |
 | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif" width="100%" alt="Taskbar widget and details panel demo" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif" width="100%" alt="Settings window preview" /> |
+| <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/assets/taskbar-popup-panel.gif" width="100%" alt="Taskbar widget and details panel demo" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/assets/settings-preview-all.gif" width="100%" alt="Settings window preview" /> |
 
 | Zone Drag-and-Drop Editor | Widgets Overview |
 | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/4-editing-panel.gif" width="100%" alt="Editing panel" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/5-widgets.gif" width="100%" alt="Widgets overview" /> |
+| <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/assets/settings-editing-panel.gif" width="100%" alt="Editing panel" /> | <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/assets/settings-widgets.gif" width="100%" alt="Widgets overview" /> |
 
 ## Quick start
 
