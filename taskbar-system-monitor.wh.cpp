@@ -81,20 +81,18 @@ SOFTWARE.
 /*
 # Taskbar System Monitor
 
-Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network,
-battery, temperatures and more. Click a reading for details.
+Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network, battery, temperatures and more. Click a reading for details.
 
-## Quick start
+### Preset Switching
+![Preset switching on the taskbar](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/3-preset-preview.gif)
 
-1. Install the mod. The defaults already work.
-2. Right-click the taskbar, then **System Monitor settings**.
-3. On the **Readings** page, drag readings to move them, click one for its
-   options, and use a zone's **+** to add more. Changes show at once.
+| Taskbar & Details Panel | Settings Window |
+| :---: | :---: |
+| ![Taskbar widget and details panel demo](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif) | ![Settings window preview](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif) |
 
-Want a ready-made look? **Presets** sets everything up in one click, and
-Undo takes it back. Prefer typing? Switch the page to **Text** and write
-names separated by commas, such as `cpu, ram, battery`. Small typos
-(`cpuu`) and everyday words (`memory`) are understood.
+| Zone Drag-and-Drop Editor | Widgets Overview |
+| :---: | :---: |
+| ![Editing panel](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/4-editing-panel.gif) | ![Widgets overview](https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/5-widgets.gif) |
 
 ## Readings
 
