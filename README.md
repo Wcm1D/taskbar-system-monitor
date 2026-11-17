@@ -4,8 +4,8 @@ Live readings on the Windows 11 taskbar: CPU, GPU, RAM, disk, network,
 battery, temperatures and more. Click a reading for details.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif" width="48%" alt="Taskbar widget and details panel demo" />
-  <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif" width="48%" alt="Taskbar System Monitor settings preview" />
+  <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/1-hero.gif" height="260" alt="Taskbar widget and details panel demo" />
+  <img src="https://raw.githubusercontent.com/Wcm1D/taskbar-system-monitor/main/2-settings.gif" height="260" alt="Taskbar System Monitor settings preview" />
 </p>
 
 ## Quick start
