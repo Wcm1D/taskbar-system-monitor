@@ -2,7 +2,7 @@
 // @id              taskbar-system-monitor
 // @name            Taskbar System Monitor
 // @description     Live CPU, GPU, RAM, battery, network, weather and more on the Windows 11 taskbar. Click for details, right-click to set up.
-// @version         1.1.0
+// @version         1.1.1
 // @author          Wcm1D
 // @github          https://github.com/Wcm1D
 // @license         GPL-3.0
@@ -208,6 +208,12 @@ on **Advanced logs** there (off by default).
   noted in the full reference are untested.
 
 ## Changelog
+
+### 1.1.1
+
+- **Labs** switch (About page) now lists everything it unlocks and the
+  page each one is on.
+- Labs settings say which state is the default.
 
 ### 1.1.0
 
@@ -32504,7 +32510,7 @@ const std::vector<UiPage>& UiPages() {
              L"Make room before the Start button"},
             {L"position.startMovable", K::Toggle,
              L"Shift the Start button itself (experimental)",
-             L"Off: only the pinned/running app icons shift right, same as "
+             L"Off (default): only the pinned/running app icons shift right, same as "
              L"without this. On: the Start button moves too, so the widget "
              L"can sit right in the taskbar's corner. Start is a core "
              L"Windows control this mod does not otherwise touch, so this "
@@ -40104,7 +40110,7 @@ void BuildReadingsPreview(const ModSettings& settings) {
         }
         auto note = UiText(
             L"Hidden zones have active items (" + names +
-                L") — enable Experimental features in About to edit. They "
+                L"). Turn on Labs in About to edit them. They "
                 L"stay on the taskbar meanwhile.",
             12, 400, 0.65, true);
         note.Margin(Thickness{2, 6, 0, 0});
@@ -43208,7 +43214,7 @@ Border UiWeatherNowCard() {
 // About ▸ the log: what the mod noted while running (placement, sensors,
 // the web), newest last, with a few facts about this PC on top when copied.
 std::wstring UiDiagnostics() {
-    std::wstring text = L"Taskbar System Monitor 1.1.0 (Windhawk mod)\r\n";
+    std::wstring text = L"Taskbar System Monitor 1.1.1 (Windhawk mod)\r\n";
     OSVERSIONINFOEXW version{sizeof(version)};
     using RtlGetVersionProc = LONG(WINAPI*)(OSVERSIONINFOEXW*);
     if (auto rtl = reinterpret_cast<RtlGetVersionProc>(GetProcAddress(
@@ -43252,7 +43258,7 @@ bool g_uiLogOpen = false;
 // keeping and resetting, troubleshooting, and the log folded at the end.
 void UiBuildAboutPage() {
     g_ui.content.Children().Append(UiCard(
-        L"Taskbar System Monitor 1.1.0",
+        L"Taskbar System Monitor 1.1.1",
         L"A Windhawk mod by Wcm1D, under GPL-3.0. System readings, network "
         L"use, weather and the exchange rate on the Windows 11 taskbar.",
         nullptr));
@@ -43276,15 +43282,21 @@ void UiBuildAboutPage() {
         g_ui.content.Children().Append(UiCard(
             L"Enable experimental & lab features",
             L"Off (default). Features that work but are not polished yet. "
-            L"On shows them: the swell under the pointer and the panel "
-            L"switch below; Before system icons, After system icons and "
-            L"After clock on the Readings page; Shift the Start button "
-            L"itself, Center zone with centered apps and Other monitors "
-            L"show under Position; and a reading's own icon size, value "
-            L"size, value width and alignment in its options. Off hides "
-            L"them and the taskbar ignores what they were set to, but "
-            L"nothing is deleted: turning Labs on again brings every choice "
-            L"back. Readings already in a hidden zone stay on the taskbar.",
+            L"On unlocks:\n"
+            L"\x2022 About: Swell under the pointer and Panel: fixed top "
+            L"while resizing, just below.\n"
+            L"\x2022 Readings: the Before system icons, After system icons "
+            L"and After clock zones.\n"
+            L"\x2022 Readings \x25B8 a reading's options: its own icon size, "
+            L"value size, value width and alignment.\n"
+            L"\x2022 Presets: Auto-switch on battery and on high load or "
+            L"fullscreen.\n"
+            L"\x2022 Position: Other monitors show, Center zone with centered "
+            L"apps, and Shift the Start button itself.\n"
+            L"Off hides them and the taskbar ignores what they were set to. "
+            L"Nothing is deleted: turning Labs on again brings every choice "
+            L"back. Readings already in a hidden zone stay on the taskbar, "
+            L"and Auto-switch rules already set keep working.",
             master));
     }
     if (g_labs) {
@@ -43300,12 +43312,12 @@ void UiBuildAboutPage() {
             });
             Border card = UiCard(
                 L"Swell under the pointer",
-                L"On the Readings page, the readings under the pointer swell "
-                L"in a smooth wave like a dock while the pointer moves over a "
-                L"zone. Off (the default, closer to Windows 11): readings keep "
-                L"their size under the pointer, and only the picked one "
-                L"(clicked or reached with the arrow keys) is drawn a little "
-                L"larger. Dragging and the small bounce of a click work "
+                L"Off (default), closer to Windows 11: on the Readings page, "
+                L"readings keep their size under the pointer, and only the "
+                L"picked one (clicked or reached with the arrow keys) is "
+                L"drawn a little larger. On: the readings under the pointer "
+                L"swell in a smooth wave like a dock while the pointer moves "
+                L"over a zone. Dragging and the small bounce of a click work "
                 L"either way.",
                 wave);
             card.Margin(Thickness{28, 0, 0, 4});

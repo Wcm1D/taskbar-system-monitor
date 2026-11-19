@@ -3,17 +3,26 @@
 All notable changes to Taskbar System Monitor. Versions follow the
 `@version` line in `taskbar-system-monitor.wh.cpp`.
 
-##[1.1.1] - 2026-11
-Settings window
-The Enable experimental & lab features switch on the About page now lists what it unlocks and where each one is:
-About: Swell under the pointer, and Panel: fixed top while resizing.
-Readings: the Before system icons, After system icons and After clock zones.
-Readings ▸ a reading's options: its own icon size, value size, value width and alignment.
-Presets: Auto-switch.
-Position: Other monitors show, Center zone with centered apps, and Shift the Start button itself.
-It also says that Auto-switch rules you already set keep working with Labs off, as do readings in a hidden zone.
-Labs settings now name their default state: Swell under the pointer and Shift the Start button itself are Off (default), and Panel: fixed top while resizing is On (default).
-The note about hidden zones on the Readings page now says to turn on Labs in About, matching the switch's name.
+## [1.1.1] - 2026-11
+
+### Settings window
+- The **Enable experimental & lab features** switch on the About page now
+  lists what it unlocks and where each one is:
+  - About: Swell under the pointer, and Panel: fixed top while resizing.
+  - Readings: the Before system icons, After system icons and After clock
+    zones.
+  - Readings ▸ a reading's options: its own icon size, value size, value
+    width and alignment.
+  - Presets: Auto-switch.
+  - Position: Other monitors show, Center zone with centered apps, and
+    Shift the Start button itself.
+- It also says that Auto-switch rules you already set keep working with
+  Labs off, as do readings in a hidden zone.
+- Labs settings now name their default state: **Swell under the pointer**
+  and **Shift the Start button itself** are Off (default), and **Panel:
+  fixed top while resizing** is On (default).
+- The note about hidden zones on the Readings page now says to turn on
+  Labs in About, matching the switch's name.
 
 ## [1.1.0] - 2026-11
 
