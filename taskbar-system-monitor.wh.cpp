@@ -2,7 +2,7 @@
 // @id              taskbar-system-monitor
 // @name            Taskbar System Monitor
 // @description     Live CPU, GPU, RAM, battery, network, weather and more on the Windows 11 taskbar. Click for details, right-click to set up.
-// @version         1.0.0
+// @version         1.1.0
 // @author          Wcm1D
 // @github          https://github.com/Wcm1D
 // @license         GPL-3.0
@@ -126,6 +126,17 @@ adapter with the most dedicated memory that is currently on.
 - **Move the widget**: set a hotkey under **Position**, press it, drag the
   widget (also onto another monitor), then **Enter** to save or **Esc** to
   cancel.
+- **Primary zone**: follows the taskbar's alignment, at the far left while
+  Start is centered and in the middle while Start is aligned left.
+  **Position ▸ Primary zone** can pin it to the far left instead.
+- **Labs**: features that work but are not polished yet (the swell under
+  the pointer, the zones by the system icons and the clock, and a few
+  advanced position settings) are under **About ▸ Labs**. Turning Labs off
+  keeps their settings for later.
+- **Auto-switch presets** (Labs): in **Presets**, pick a preset for
+  battery power and one for high load or fullscreen games; the mod switches
+  after 10 seconds and switches back when the condition ends. It never
+  switches while the settings window is open.
 - **Settings page in Windhawk**: only two switches, to open the settings
   window if the taskbar menu entry is missing, and to reset the window's
   choices if the widget became hard to see.
@@ -195,6 +206,38 @@ on **Advanced logs** there (off by default).
 - Icons need the Segoe Fluent Icons font that ships with Windows 11.
 - Works with other Windhawk taskbar mods in most cases; the combinations
   noted in the full reference are untested.
+
+## Changelog
+
+### 1.1.0
+
+- **Presets** now also carry the layout style and the Primary zone
+  alignment. The built-ins are retuned: **Compact** (was Minimalist),
+  **Balanced** (stays offline) and **Heavy Monitoring**. Readings a PC
+  lacks hide themselves.
+- **Auto-switch presets** (Labs): one preset for battery power and one for
+  high load or fullscreen, switched after 10 seconds, paused while the
+  settings window is open.
+- **Primary zone** replaces the Left and Center zones and follows the
+  taskbar's alignment. Existing setups move over by themselves.
+- **Labs** (About page) gathers the unfinished features; the zones by the
+  system icons and the clock now live there.
+- **Auto-compact**: when the taskbar is too full, zones switch to a compact
+  style first, with a notice offering to keep it or show the zone.
+- **Settings window**: a quick filter, a Ping page, tailored descriptions,
+  hints under text boxes with a problem, a Motion feel choice, a preview of
+  warning colors on the Look page and a tidier About page.
+- **Readings editor**: drag-and-drop shows where a reading will land
+  (beside, joined or stacked), **Alt+arrow keys** move the selected reading,
+  and each reading's own options come first.
+- **Icons** scale down on short taskbars and in the compact style.
+- **Fixes**: a crash when reopening Presets, double redraws while changing
+  settings, and memory held by closed settings pages. Old daily data usage
+  is pruned from storage.
+
+### 1.0.0
+
+- First release.
 
 ## Credits and license
 
@@ -386,6 +429,10 @@ std::atomic<bool> g_diagMaster{false};  // Advanced logs: the master switch (off
 // Troubleshooting ▸ "Panel: fixed top while resizing" (on by default): see
 // ApplyHoverPlace. Off: the window's top moves with the card, as before.
 std::atomic<bool> g_panelFixedTop{true};
+// About ▸ Labs (ui.labs, off by default): the master switch for features
+// that work but are not polished yet. Off hides their controls and bypasses
+// their stored values (which are kept, never deleted).
+std::atomic<bool> g_labs{false};
 std::atomic<int> g_diagLines[kDiagCount];  // Lines asked for, all session.
 struct DiagWindow {
     ULONGLONG start = 0;
@@ -736,8 +783,14 @@ struct ModSettings {
     // ("center: cpu, ram; tray: down+up"). The first zone that is not End
     // is the main widget: draggable, may reserve space before Start, and
     // copied to other monitors. cells holds the main zone's entries.
+    // Primary (1.1.0) is the adaptive main zone that replaces Left edge and
+    // Center in the settings window: at the far left while the app buttons
+    // are centered, in the middle while they sit at the left, or pinned to
+    // the far left (position.primaryPin). Added last so the bit of every
+    // older zone (the fit notice, the placement log) keeps its number.
     enum class ZoneKind { Default, Left, AppsLeft, Apps, Center, Tray, End,
-                          SysLeft, SysRight };
+                          SysLeft, SysRight, Primary };
+    static constexpr size_t kZoneKindCount = 10;
     struct Zone {
         ZoneKind kind = ZoneKind::Default;
         std::vector<ItemCell> cells;
@@ -856,6 +909,15 @@ struct ModSettings {
     bool adaptiveColors = true;
     bool reserveSpace = false;
     bool startButtonMovable = false;  // Experimental: Start itself can shift.
+    // Labs (About ▸ Labs, ui.labs): unpolished features. Off: their controls
+    // are hidden and their stored values are bypassed here, never deleted.
+    bool labs = false;
+    // The Primary zone pinned to the far left (position.primaryPin = left),
+    // else it follows the app buttons' alignment.
+    bool primaryPinned = false;
+    // A zone short of room is first drawn compact (icons for row labels,
+    // short units, tighter gaps) before it is scaled down.
+    bool autoCompact = true;
     bool allMonitors = false;
     bool networkBits = false;
     bool anchorRight = false;
@@ -1271,6 +1333,8 @@ constexpr int kUiTopicNetwork = 0, kUiTopicWeather = 1, kUiTopicCurrency = 2,
               kUiTopicBatteryTime = 6, kUiTopicPrivacy = 7;
 struct MetricsSnapshot;
 void RefreshHoverPopup(const MetricsSnapshot& snapshot);
+// Presets ▸ Auto-switch, checked with each new sample (taskbar thread).
+void PresetAutoSwitchTick(const MetricsSnapshot& snapshot);
 void RecordTrend(const MetricsSnapshot& snapshot);
 MetricsSnapshot HoverSnapshot();
 [[clang::no_destroy]] SolidColorBrush g_textBrush{nullptr};
@@ -1634,6 +1698,9 @@ constexpr KeptSetting kKeptSettings[] = {
     {L"position.reserveSpace", true, L"0"},
     {L"position.startMovable", true, L"0"},
     {L"position.reserveGap", true, L"8"},
+    {L"position.primaryPin", false, L"auto"},
+    {L"position.autoCompact", true, L"1"},
+    {L"details.motionFeel", false, L"windows"},
     {L"refresh.updateIntervalMs", true, L"1000"},
     {L"refresh.smoothingMs", true, L"0"},
     {L"refresh.hideZeroMs", true, L"2000"},
@@ -1829,11 +1896,83 @@ void RestoreSettingsIfFresh() {
     if (ReadStored(L"storage.v1").empty()) Wh_SetStringValue(L"storage.v1", L"1");
 }
 
+// Details panel ▸ Motion feel: a preset sets the six motion settings at
+// once; Custom uses each one as stored. The stored values are kept either
+// way, so Custom brings them back.
+struct MotionPreset {
+    PCWSTR feel;
+    PCWSTR animation, follow, switchStyle, switchSpeed, resizeSpeed,
+        switchDelay;
+};
+constexpr MotionPreset kMotionPresets[] = {
+    // Windows: the defaults, close to the taskbar's own panels.
+    {L"windows", L"windows", L"normal", L"glide", L"normal", L"auto", L"200"},
+    {L"snappy", L"standard", L"snappy", L"glide", L"fast", L"veryfast",
+     L"150"},
+    {L"relaxed", L"expressive", L"floaty", L"glide", L"slow", L"normal",
+     L"300"},
+};
+constexpr PCWSTR kMotionKeys[] = {
+    L"details.animation",  L"details.follow",      L"details.switchStyle",
+    L"details.switchSpeed", L"details.resizeSpeed", L"details.switchDelay"};
+
+// The value a motion setting has under the current Motion feel.
+std::wstring MotionSetting(PCWSTR key) {
+    std::wstring feel = KeptValue(*FindKept(L"details.motionFeel"));
+    for (const auto& preset : kMotionPresets) {
+        if (feel != preset.feel) continue;
+        const PCWSTR values[] = {preset.animation,   preset.follow,
+                                 preset.switchStyle, preset.switchSpeed,
+                                 preset.resizeSpeed, preset.switchDelay};
+        for (size_t i = 0; i < std::size(kMotionKeys); ++i) {
+            if (wcscmp(kMotionKeys[i], key) == 0) return values[i];
+        }
+    }
+    return GetStringSetting(key);  // Custom (or a value from a newer version).
+}
+
+bool KeptIsDefault(PCWSTR key) {
+    const KeptSetting* kept = FindKept(key);
+    return !kept || KeptValue(*kept) == kept->fallback;
+}
+
+// 1.1.0, once: motion settings changed one by one become Motion feel:
+// Custom, so the panel moves exactly as before.
+void MigrateMotionFeel() {
+    if (ReadStored(L"motion.v1") == L"1") return;
+    Wh_SetStringValue(L"motion.v1", L"1");
+    bool tuned = std::any_of(std::begin(kMotionKeys), std::end(kMotionKeys),
+                             [](PCWSTR key) { return !KeptIsDefault(key); });
+    if (tuned) {
+        SetUiOverride(L"details.motionFeel", L"custom", false);
+        ModLog(L"Motion settings were tuned; Motion feel set to Custom");
+    }
+}
+
+// 1.1.0, once: Labs starts on for anyone already using one of its
+// features, so nothing changes on the taskbar with the upgrade.
+void MigrateLabs() {
+    if (ReadStored(L"labs.v1") == L"1") return;
+    Wh_SetStringValue(L"labs.v1", L"1");
+    if (!ReadStored(L"ui.labs").empty()) return;  // Already chosen.
+    bool inUse = ReadStored(L"ui.dockSwell") == L"on" ||
+                 ReadStored(L"ui.exp.fixedTop") == L"off" ||
+                 !KeptIsDefault(L"position.startMovable") ||
+                 !KeptIsDefault(L"position.otherMonitors") ||
+                 !KeptIsDefault(L"position.centerWithApps");
+    if (inUse) {
+        Wh_SetStringValue(L"ui.labs", L"on");
+        ModLog(L"Labs switched on: a Labs feature was already in use");
+    }
+}
+
 // Runs before settings load: marks fresh storage, then handles the Windhawk
 // page's reset switch.
 void PrepareSettingsStorage() {
     RestoreSettingsIfFresh();
     MigrateReadingsSource();
+    MigrateLabs();
+    MigrateMotionFeel();
     HandleResetSwitch();
     SwitchFlipped(L"openSettings", L"open.seen");  // Records it; no window.
 }
@@ -2112,6 +2251,7 @@ void ParseItems(const std::wstring& text, ModSettings& settings) {
             if (name == L"end") kind = ZoneKind::End;
             if (name == L"sysleft") kind = ZoneKind::SysLeft;
             if (name == L"sysright") kind = ZoneKind::SysRight;
+            if (name == L"primary") kind = ZoneKind::Primary;
             if (kind) {
                 zone = zoneFor(*kind);
                 entry = trim(entry.substr(colon + 1));
@@ -2553,6 +2693,13 @@ void ParseItems(const std::wstring& text, ModSettings& settings) {
                 picked = true;
             }
         }
+        // Then the Primary zone: the main widget by its very name.
+        for (size_t i = 0; i < zones.size() && !picked; ++i) {
+            if (zones[i].kind == ZoneKind::Primary) {
+                main = i;
+                picked = true;
+            }
+        }
         for (size_t i = 0; i < zones.size() && !picked; ++i) {
             if (zones[i].kind != ZoneKind::End &&
                 zones[i].kind != ZoneKind::SysLeft &&
@@ -2664,22 +2811,32 @@ struct ItemsPreset {
     PCWSTR items;
     PCWSTR layout;
 };
-// Built-in sets, one per level of what the mod can do: Minimalist (a little),
+// Built-in sets, one per level of what the mod can do: Compact (a little),
 // Balanced (the everyday set, the default) and Heavy Monitoring (everything,
 // across three zones). ? hides what a PC lacks (a GPU, a battery, a sensor,
 // a fan), so every set suits desktops and laptops. Two readings in a row
 // between dividers stack as a pair in the Stacked pairs default style.
+// 1.1.0: every reading a PC may lack carries ? (battery, GPU, sensors), so
+// one set suits desktops and laptops; related readings share one block
+// (+) under one short label ([auto]: the CPU's or GPU's own name), and
+// battery power hides while it reads zero (on mains with a charge limit).
+// Balanced is what a new install starts with, so it stays offline: no
+// weather or ping (Compact and Heavy go online only once applied).
+// The key "minimalist" stays for Compact, so stored choices still match.
 constexpr ItemsPreset kPresets[] = {
-    {L"minimalist", L"Minimalist",
-     L"center: weather[](condition icon24):row, net[]:row",
-     L"twoRows"},
+    {L"minimalist", L"Compact",
+     L"primary: cpu+ram(used), batterypower(hidezero)?, net[]?; "
+     L"tray: weather[](condition icon20)?",
+     L"oneRow"},
     {L"balanced", L"Balanced",
-     L"center: cpu, ram | down, up",
+     L"primary: cpu[auto]!+cputemp?, ram(used)!, gpu?!+gputemp?, "
+     L"batterytime?!+batterypower(hidezero)?!, net[]?",
      L"twoRows"},
     {L"heavy", L"Heavy Monitoring",
-     L"center: cpu!+cputemp?+cpupower?, gpu?!+gputemp?+gpupower?, | "
-     L"ram(used)!, vram(used)?! | fan(*):stack | disk:stack | down, up | ping?; "
-     L"tray: down[]+up[]:stack, batterypower(hidezero)?+batterytime?:stack",
+     L"primary: cpu[auto]!+cputemp?+cpupower?, gpu[auto]?!+gputemp?+gpupower?, | "
+     L"ram(used)!, vram(used)?! | fan(*)?:stack | disk:stack | down, up | ping?; "
+     L"tray: batterytime?!+batterypower(hidezero)?!, "
+     L"weather[](condition icon20)?",
      L"twoRows"},
 };
 // The set used until the readings are set up (Balanced).
@@ -2760,7 +2917,9 @@ void LoadDiagFlags() {
         // On unless it was switched off.
         g_diagOn[i] = ReadStored(kDiagKeys[i]) != L"off";
     }
-    g_panelFixedTop = ReadStored(L"ui.exp.fixedTop") != L"off";
+    g_labs = ReadStored(L"ui.labs") == L"on";
+    // A Labs switch: without Labs, its default (on).
+    g_panelFixedTop = !g_labs || ReadStored(L"ui.exp.fixedTop") != L"off";
 }
 
 void LoadSettings() {
@@ -2848,6 +3007,10 @@ void LoadSettings() {
         if (menuLayout.empty()) menuLayout = kPresets[kDefaultPreset].layout;
     }
     settings.itemsText = itemsText;
+    settings.labs = g_labs;
+    settings.primaryPinned =
+        GetStringSetting(L"position.primaryPin") == L"left";
+    settings.autoCompact = GetIntSetting(L"position.autoCompact") != 0;
     ParseItems(itemsText, settings);
     settings.layout = ParseLayout(menuLayout.empty()
                                       ? GetStringSetting(L"layout")
@@ -2904,6 +3067,12 @@ void LoadSettings() {
             settings.anchorRight = false;
             settings.anchorCenter = true;
             break;
+        case ModSettings::ZoneKind::Primary:
+            // Pinned: a Left edge zone. Auto: a Center zone that moves to
+            // the left edge while the app buttons are centered.
+            settings.anchorRight = false;
+            settings.anchorCenter = !settings.primaryPinned;
+            break;
         case ModSettings::ZoneKind::Tray:
         case ModSettings::ZoneKind::End:
         case ModSettings::ZoneKind::SysLeft:
@@ -2918,25 +3087,34 @@ void LoadSettings() {
     settings.monitor = std::clamp(GetIntSetting(L"position.monitor"), 1, 32);
     settings.adaptiveColors = GetIntSetting(L"colors.adaptiveColors") != 0;
     settings.reserveSpace = GetIntSetting(L"position.reserveSpace") != 0;
+    // A Labs setting: without Labs, Start is never shifted on its own.
     settings.startButtonMovable =
-        GetIntSetting(L"position.startMovable") != 0;
+        settings.labs && GetIntSetting(L"position.startMovable") != 0;
     settings.reserveGap = std::clamp(GetIntSetting(L"position.reserveGap"), 0, 100);
     // A Left edge zone is meant to sit before Start: it makes the room by
-    // itself, Start included.
-    if (settings.mainZone == ModSettings::ZoneKind::Left) {
+    // itself, Start included. So is a Primary zone pinned to the far left
+    // (asked for in so many words, so with or without Labs).
+    if (settings.mainZone == ModSettings::ZoneKind::Left ||
+        (settings.mainZone == ModSettings::ZoneKind::Primary &&
+         settings.primaryPinned)) {
         settings.reserveSpace = true;
         settings.startButtonMovable = true;
     }
     settings.allMonitors = GetIntSetting(L"position.allMonitors") != 0;
     {
         std::wstring mode = GetStringSetting(L"position.otherMonitors");
+        if (!settings.labs) mode = L"split";  // Labs setting: its default.
         settings.copyMode = mode == L"main"  ? ModSettings::CopyMode::Main
                             : mode == L"all" ? ModSettings::CopyMode::All
                                              : ModSettings::CopyMode::Split;
     }
     {
         using C = ModSettings::CenterWithApps;
-        std::wstring mode = GetStringSetting(L"position.centerWithApps");
+        // A Labs setting: without Labs, a Center zone behaves like the
+        // Primary zone (to the left edge with centered apps).
+        std::wstring mode = settings.labs
+                                ? GetStringSetting(L"position.centerWithApps")
+                                : std::wstring(L"leftEdge");
         settings.centerWithApps = mode == L"beside"        ? C::Beside
                                   : mode == L"leftOfApps"  ? C::LeftOfApps
                                   : mode == L"rightOfApps" ? C::RightOfApps
@@ -2981,9 +3159,9 @@ void LoadSettings() {
     g_privacyForceCheck = true;  // Auto-detect or its list may have changed.
     settings.openDetailsHotkey = GetStringSetting(L"details.openHotkey");
     settings.hoverSwitchMs =
-        std::clamp(GetIntSetting(L"details.switchDelay"), 100, 1000);
+        std::clamp(_wtoi(MotionSetting(L"details.switchDelay").c_str()), 100, 1000);
     {
-        std::wstring animation = GetStringSetting(L"details.animation");
+        std::wstring animation = MotionSetting(L"details.animation");
         settings.hoverAnimation = animation == L"off"          ? 0
                                   : animation == L"subtle"     ? 1
                                   : animation == L"standard"   ? 2
@@ -3068,7 +3246,7 @@ void LoadSettings() {
     settings.hoverFixed = GetStringSetting(L"details.position") == L"fixed";
     settings.hoverValuesLeft = GetStringSetting(L"details.valueAlign") == L"left";
     {
-        std::wstring follow = GetStringSetting(L"details.follow");
+        std::wstring follow = MotionSetting(L"details.follow");
         settings.hoverFollowSpring = follow == L"spring";
         settings.hoverFollowTau = follow == L"instant"  ? 0.0
                                   : follow == L"snappy" ? 0.10
@@ -3096,7 +3274,7 @@ void LoadSettings() {
     settings.pingDotIcon = GetStringSetting(L"ping.icon") == L"dot";
     settings.pingOwnPanel = GetStringSetting(L"details.pingPanel") != L"network";
     {
-        std::wstring speed = GetStringSetting(L"details.switchSpeed");
+        std::wstring speed = MotionSetting(L"details.switchSpeed");
         settings.hoverGlideTau = speed == L"veryfast" ? 0.03
                                  : speed == L"fast"   ? 0.05
                                  : speed == L"slow"   ? 0.16
@@ -3105,7 +3283,7 @@ void LoadSettings() {
                                    : speed == L"fast"   ? 0.5
                                    : speed == L"slow"   ? 1.0
                                                         : 0.72;
-        std::wstring resize = GetStringSetting(L"details.resizeSpeed");
+        std::wstring resize = MotionSetting(L"details.resizeSpeed");
         settings.hoverResizeScale = resize == L"instant"    ? 0.12
                                     : resize == L"veryfast" ? 0.28
                                     : resize == L"fast"     ? 0.45
@@ -3114,7 +3292,7 @@ void LoadSettings() {
                                                             : 0.0;
     }
     settings.hoverSwitchRise =
-        GetStringSetting(L"details.switchStyle") == L"rise";
+        MotionSetting(L"details.switchStyle") == L"rise";
     settings.slideOnMove = GetIntSetting(L"position.slide") != 0;
     settings.alertGradual = GetStringSetting(L"colors.alertStyle") != L"steps";
     settings.usageColors = GetIntSetting(L"colors.usageColors") != 0;
@@ -7345,6 +7523,72 @@ void SaveDataUsage() {
     u.lastSave = std::chrono::steady_clock::now();
 }
 
+// Data used is kept for the last 400 days and 24 months, which is what the
+// report and the CSV cover (see ReadUsageHistory); older keys are deleted
+// so the mod's storage does not grow forever. The storage cannot be
+// listed, so the dates are walked back from the cutoff to where the last
+// pass stopped (usage.prunedDay / usage.prunedMonth): one date a day, at
+// most a year or two on the first pass. Runs on the metrics worker.
+void PruneOldUsage() {
+    constexpr int kKeepDays = 401, kKeepMonths = 25;  // One spare each.
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    now.wHour = 12;  // Midday: whole days back never land on a DST edge.
+    now.wMinute = now.wSecond = now.wMilliseconds = 0;
+    FILETIME file{};
+    if (!SystemTimeToFileTime(&now, &file)) return;
+    ULARGE_INTEGER base{};
+    base.LowPart = file.dwLowDateTime;
+    base.HighPart = file.dwHighDateTime;
+    constexpr ULONGLONG kDay = 864000000000ULL;  // 100 ns units.
+    auto dayAgo = [&](int days) {
+        ULARGE_INTEGER at = base;
+        at.QuadPart -= static_cast<ULONGLONG>(days) * kDay;
+        FILETIME back{at.LowPart, at.HighPart};
+        SYSTEMTIME day{};
+        FileTimeToSystemTime(&back, &day);
+        return day.wYear * 10000 + day.wMonth * 100 + day.wDay;
+    };
+    int deleted = 0;
+    int doneDay = _wtoi(ReadStored(L"usage.prunedDay").c_str());
+    for (int n = kKeepDays; n < kKeepDays + 400; ++n) {
+        int day = dayAgo(n);
+        if (doneDay && day <= doneDay) break;
+        for (PCWSTR prefix : {L"usage.d.", L"usage.dm.", L"usage.dn."}) {
+            std::wstring key = prefix + std::to_wstring(day);
+            if (!ReadStored(key, 64).empty()) {
+                Wh_DeleteValue(key.c_str());
+                ++deleted;
+            }
+        }
+    }
+    Wh_SetStringValue(L"usage.prunedDay",
+                      std::to_wstring(dayAgo(kKeepDays)).c_str());
+    auto monthAgo = [&](int months) {
+        int index = now.wYear * 12 + (now.wMonth - 1) - months;
+        return (index / 12) * 100 + index % 12 + 1;
+    };
+    int doneMonth = _wtoi(ReadStored(L"usage.prunedMonth").c_str());
+    for (int n = kKeepMonths; n < kKeepMonths + 36; ++n) {
+        int month = monthAgo(n);
+        if (doneMonth && month <= doneMonth) break;
+        for (PCWSTR prefix : {L"usage.m.", L"usage.mm."}) {
+            std::wstring key = prefix + std::to_wstring(month);
+            if (!ReadStored(key, 64).empty()) {
+                Wh_DeleteValue(key.c_str());
+                ++deleted;
+            }
+        }
+    }
+    Wh_SetStringValue(L"usage.prunedMonth",
+                      std::to_wstring(monthAgo(kKeepMonths)).c_str());
+    if (deleted) {
+        ModLog(L"Data usage: %d stored values older than 400 days or 24 "
+               L"months removed",
+               deleted);
+    }
+}
+
 // Adds bytes to today and this month (local time). A new day or month
 // starts from what storage already holds for it.
 void AddDataUsage(double down, double up) {
@@ -7368,6 +7612,7 @@ void AddDataUsage(double down, double up) {
                 LoadUsageValue(L"usage.mm." + std::to_wstring(month));
         }
         u.loaded = true;
+        PruneOldUsage();  // At start and with each new day.
     }
     LookAtInternetConnection();
     if (down > 0 || up > 0) {
@@ -13484,6 +13729,8 @@ struct WidgetLayout {
     std::array<int, kMaxBatteryBars> barEntries{-1, -1, -1, -1};
     std::array<Rect, kMaxSeparators> separators{};
     int separatorCount = 0;
+    // Drawn compact for lack of room (Compact when space is tight).
+    bool compact = false;
 };
 std::optional<WidgetLayout> g_widgetLayout;
 bool g_valuesStale = false;  // Layout changed; value text must be redrawn.
@@ -14721,6 +14968,35 @@ void RegisterWidgetBorderCallbacks(Grid host,
         throw;
     }
 }
+// Icons in proportion (1.1.0). Icon sizes are in DIPs like the text, so
+// they follow the monitor's scale by themselves. On a taskbar shorter than
+// Windows' standard 48 DIPs they shrink with it, as the taskbar's own icons
+// do, and in the compact look none is taller than the values beside it
+// (an icon20 next to 12 px values would tower over them).
+void ScaleIconSizes(ModSettings& s, double factor, double cap) {
+    auto fit = [&](int size) {
+        double scaled = std::min(size * factor, cap);
+        return static_cast<int>(
+            std::clamp(std::round(scaled), 8.0, static_cast<double>(size)));
+    };
+    s.iconSize = fit(s.iconSize);
+    for (int e = 0; e < s.entryCount; ++e) {
+        if (s.format[e].iconSize) s.format[e].iconSize = fit(*s.format[e].iconSize);
+    }
+}
+// The layout was worked out with smaller icons than the settings style
+// them with: it says so per entry (iconFontSize), so they are drawn that
+// size and fit the room the layout gave them.
+void UseLayoutIconSizes(WidgetLayout& layout, const ModSettings& styled,
+                        const ModSettings& used) {
+    for (int e = 0; e < used.entryCount && e < kMaxEntries; ++e) {
+        double want = used.IconSizeOf(e);
+        if (want >= styled.IconSizeOf(e) - 0.01) continue;
+        double& size = layout.iconFontSize[e];
+        if (size <= 0 || size > want) size = want;
+    }
+}
+
 WidgetPlacement ResolveWidgetPlacement(const ModSettings& settings,
                                        const TaskbarGeometry& geometry,
                                        PreferredPosition preferred,
@@ -14729,10 +15005,19 @@ WidgetPlacement ResolveWidgetPlacement(const ModSettings& settings,
                                        bool reservationOnly = false,
                                        const ItemCells* cells = nullptr) {
     if (geometry.height > 0) g_taskbarHeightSeen = geometry.height;
-    auto evaluate = [&](WidgetLayoutMode mode, double minimumScale) {
+    // A short taskbar (small taskbar buttons, or a mod): icons in proportion.
+    std::optional<ModSettings> shortBar;
+    if (geometry.height > 0 && geometry.height < 47.5) {
+        shortBar = settings;
+        ScaleIconSizes(*shortBar, geometry.height / 48.0, 1e9);
+    }
+    const ModSettings& base = shortBar ? *shortBar : settings;
+    auto evaluateWith = [&](const ModSettings& look, WidgetLayoutMode mode,
+                            double minimumScale) {
         auto layout = BuildWidgetLayout(
-            settings, font, mode, cells,
+            look, font, mode, cells,
             geometry.height > 0 ? UsableTaskbarHeight(geometry.height) : 0.0);
+        if (&look != &settings) UseLayoutIconSizes(layout, settings, look);
         auto placement = ResolvePlacementForSize(
             settings, geometry, preferred, layout.width, minimumScale,
             layout.height, allowReservation, reservationOnly);
@@ -14745,6 +15030,9 @@ WidgetPlacement ResolveWidgetPlacement(const ModSettings& settings,
                                            : 1.0})
                            : 0;
         return WidgetPlacement{placement, layout};
+    };
+    auto evaluate = [&](WidgetLayoutMode mode, double minimumScale) {
+        return evaluateWith(base, mode, minimumScale);
     };
     // The chosen layout first, then the alternatives. Cards fall back to one
     // row, which needs the least height.
@@ -14768,12 +15056,33 @@ WidgetPlacement ResolveWidgetPlacement(const ModSettings& settings,
             return result;
         }
     }
+    // Compact when space is tight: before anything is drawn smaller, the
+    // same readings with icons for row labels and tighter gaps, at full
+    // size. Every pass starts from the full look again, so it comes back
+    // by itself once there is room.
+    if (settings.autoCompact) {
+        ModSettings compact = base;
+        compact.rowLabels = RowLabelStyle::Icon;
+        compact.itemGap = std::min(settings.itemGap, 4);
+        compact.joinedGap = std::min(settings.joinedGap, 1);
+        compact.labelGap = std::min(settings.labelGap, 2);
+        // No icon taller than the values beside it.
+        ScaleIconSizes(compact, 1.0, settings.fontSize + 1.0);
+        for (auto mode : modes) {
+            auto result = evaluateWith(compact, mode, 1.0);
+            if (result.placement.width > 0) {
+                result.layout.compact = true;
+                return result;
+            }
+        }
+    }
     // Nothing fits at full size: allow a readable shrink, keeping the
     // smallest text at about 8 logical pixels.
     double minimumScale =
         std::min(1.0, std::max({0.7, 9.0 / settings.fontSize,
                                 8.0 / settings.labelFontSize}));
-    WidgetPlacement best{{}, BuildWidgetLayout(settings, font, modes.front(), cells)};
+    WidgetPlacement best{{}, BuildWidgetLayout(base, font, modes.front(), cells)};
+    if (shortBar) UseLayoutIconSizes(best.layout, settings, base);
     best.layout.scale = 0;
     for (auto mode : modes) {
         auto result = evaluate(mode, minimumScale);
@@ -15415,13 +15724,14 @@ PreferredPosition ZonePreference(ModSettings::ZoneKind kind,
         i = j;
     }
     bool hasApps = appsRight >= 0;
-    auto center = [&] {
+    auto center = [&](bool adaptive = false) {
         preferred.fraction = 0.5;
         bool appsCentered = hasApps && appsLeft < geometry.width / 2 &&
                             appsRight > geometry.width / 2;
         if (!appsCentered) return;
         using C = ModSettings::CenterWithApps;
-        switch (settings.centerWithApps) {
+        // The Primary zone always leaves centered apps for the left edge.
+        switch (adaptive ? C::LeftEdge : settings.centerWithApps) {
             case C::LeftOfApps:
                 preferred.fraction.reset();
                 preferred.rightEdge = appsLeft - kTaskbarClearance;
@@ -15440,12 +15750,22 @@ PreferredPosition ZonePreference(ModSettings::ZoneKind kind,
     switch (kind) {
         case ZoneKind::Default:
             if (settings.anchorRight) preferred.left = beforeTray;
-            if (settings.anchorCenter) center();
+            if (settings.anchorCenter) {
+                center(settings.mainZone == ZoneKind::Primary);
+            }
             break;
         case ZoneKind::Left:
             break;
         case ZoneKind::Center:
             center();
+            break;
+        case ZoneKind::Primary:
+            // Pinned: the far left, like Left edge. Auto: the far left
+            // while the app buttons (and Start) are centered, the middle
+            // while they sit at the left, clear of Start and Search. The
+            // alignment is read from where the buttons are, so it also
+            // follows mods that move Start.
+            if (!settings.primaryPinned) center(true);
             break;
         case ZoneKind::AppsLeft:
             if (hasApps) preferred.rightEdge = appsLeft - kTaskbarClearance;
@@ -15772,6 +16092,8 @@ void UpdateWidgetSlide(const FrameworkElement& host, bool wasPlaced) {
 // window's Readings page says so, since a small or moved zone otherwise looks
 // like a fault.
 std::atomic<uint32_t> g_zonesShrunk{0}, g_zonesMoved{0}, g_zonesUnplaced{0};
+// Zones drawn compact for lack of room (Compact when space is tight).
+std::atomic<uint32_t> g_zonesCompact{0};
 // What the main taskbar drew for each zone after its last placement: the
 // layout it settled on (which can be another style or a smaller scale than
 // asked, when room is short), the width and height it got (width 0: no
@@ -15784,13 +16106,13 @@ struct ZoneActual {
     uint64_t revision = 0;
 };
 std::mutex g_zoneActualMutex;
-std::array<std::shared_ptr<const ZoneActual>, 9>
+std::array<std::shared_ptr<const ZoneActual>, ModSettings::kZoneKindCount>
     g_zoneActual;
 
 struct ZoneFit {
-    uint32_t shrunk = 0, moved = 0, unplaced = 0;
+    uint32_t shrunk = 0, moved = 0, unplaced = 0, compacted = 0;
     uint64_t revision = 0;
-    std::array<std::shared_ptr<const ZoneActual>, 9> actual;
+    std::array<std::shared_ptr<const ZoneActual>, ModSettings::kZoneKindCount> actual;
     void Note(ModSettings::ZoneKind kind,
               const WidgetPlacement& resolved,
               const PreferredPosition& preferred,
@@ -15817,6 +16139,7 @@ struct ZoneFit {
             return;
         }
         if (placement.width < layout.width - 0.5) shrunk |= bit;
+        if (layout.compact) compacted |= bit;
         // Moved: app buttons lie between where it is and where it belongs
         // (unless it belongs on top of them, as a Center zone can).
         double wanted = PreferredLeftForWidget(preferred, geometry,
@@ -15846,9 +16169,14 @@ struct ZoneFit {
                     L"zones (bits by zone): shrunk %X, moved %X, left out %X",
                     shrunk, moved, unplaced);
         }
+        if (DiagOn(kDiagTaskbar) && g_zonesCompact != compacted) {
+            DiagLog(kDiagTaskbar, L"zones drawn compact (bits by zone): %X",
+                    compacted);
+        }
         g_zonesShrunk = shrunk;
         g_zonesMoved = moved;
         g_zonesUnplaced = unplaced;
+        g_zonesCompact = compacted;
         std::lock_guard lock(g_zoneActualMutex);
         g_zoneActual = actual;
     }
@@ -16652,7 +16980,7 @@ uint32_t ComputeHiddenMask(const ModSettings& settings,
         if (settings.format[entry].hideZero) {
             if (ItemReadsZero(settings, entry, m)) {
                 if (!zeroSince[entry]) zeroSince[entry] = now;
-                // Zero for a while first (Sensors > Hide while zero after),
+                // Zero for a while first (Sensors > Wait before hiding a zero),
                 // so a speed that dips for a second does not make the
                 // widget jump.
                 if (now - zeroSince[entry] >=
@@ -17282,6 +17610,12 @@ void UpdateWidgetText(bool force = false) {
     g_hoverSnapshot = snapshot;
     if (fresh && hasNewSample) RecordTrend(snapshot);
     RefreshHoverPopup(snapshot);
+    if (hasNewSample) {
+        try {
+            PresetAutoSwitchTick(snapshot);
+        } catch (...) {
+        }
+    }
 
     {
         auto evaluate = [&](int item, std::optional<double> value,
@@ -29004,18 +29338,14 @@ StackPanel BuildHoverContent(const ModSettings& settings,
                    L"Windows Settings");
         }
     }
-    if (topic == kHoverTopicPing) {
-        button(0xE713, L"Ping settings",
-               [] { OpenSettingsWindow(std::nullopt, kUiTopicPing); });
-    }
-    if (topic == kHoverTopicWeather) {
-        button(0xE713, L"Weather settings",
-               [] { OpenSettingsWindow(std::nullopt, kUiTopicWeather); });
-    }
-    if (topic == kHoverTopicCurrency) {
-        button(0xE713, L"Rate settings",
-               [] { OpenSettingsWindow(std::nullopt, kUiTopicCurrency); });
-    }
+    // The settings of this panel's topic: the gear in the bottom bar (no
+    // tile of its own, so the shortcuts stay about the PC).
+    int settingsTopic = topic == kHoverTopicPing       ? kUiTopicPing
+                        : topic == kHoverTopicWeather  ? kUiTopicWeather
+                        : topic == kHoverTopicCurrency ? kUiTopicCurrency
+                        : topic == kHoverTopicNetwork  ? kUiTopicNetwork
+                        : hasBattery && !has({kCpu})   ? kUiTopicBattery
+                                                       : -1;
     if (!shortcuts.empty()) {
         // The width the details take; rows are filled up to it (at least
         // 300 px, so a narrow panel still gets two buttons a row).
@@ -29085,8 +29415,18 @@ StackPanel BuildHoverContent(const ModSettings& settings,
             icon.FontFamily(Media::FontFamily(kIconFont));
             icon.FontSize(14);
             icon.Text(std::wstring(1, glyph));
+            icon.HorizontalAlignment(HorizontalAlignment::Center);
+            icon.VerticalAlignment(VerticalAlignment::Center);
             b.Content(icon);
-            b.Padding(Thickness{8, 6, 8, 6});
+            // A fixed box, the glyph centered: the pointer-over background
+            // is drawn whole, with its rounded corners.
+            b.Width(34);
+            b.Height(30);
+            b.MinWidth(0);
+            b.MinHeight(0);
+            b.Padding(Thickness{});
+            b.HorizontalContentAlignment(HorizontalAlignment::Center);
+            b.VerticalContentAlignment(VerticalAlignment::Center);
             b.CornerRadius({4, 4, 4, 4});
             b.BorderThickness(Thickness{});
             b.Background(SolidColorBrush(Colors::Transparent()));
@@ -29096,9 +29436,25 @@ StackPanel BuildHoverContent(const ModSettings& settings,
         };
         Button pin = iconButton(0xE718, 1);
         Button gear = iconButton(0xE713, 2);
+        PCWSTR gearTip = settingsTopic == kUiTopicPing ? L"Ping settings"
+                         : settingsTopic == kUiTopicWeather
+                             ? L"Weather settings"
+                         : settingsTopic == kUiTopicCurrency
+                             ? L"Exchange rate settings"
+                         : settingsTopic == kUiTopicNetwork
+                             ? L"Network settings"
+                         : settingsTopic == kUiTopicBattery
+                             ? L"Battery settings"
+                             : L"System Monitor settings";
         ToolTipService::SetToolTip(
-            gear, winrt::box_value(winrt::hstring(L"System Monitor settings")));
-        auto showPin = [pin, note] {
+            gear, winrt::box_value(winrt::hstring(gearTip)));
+        // Held weakly: the pin's own Click handler holds showPin, and the
+        // panel is rebuilt often, so a strong pair would never be freed.
+        auto showPin = [weakPin = winrt::make_weak(pin),
+                        weakNote = winrt::make_weak(note)] {
+            auto pin = weakPin.get();
+            auto note = weakNote.get();
+            if (!pin || !note) return;
             bool on = g_hover.pinned;
             // Pin E718, Unpin E77A.
             pin.Content().as<TextBlock>().Text(
@@ -29121,11 +29477,11 @@ StackPanel BuildHoverContent(const ModSettings& settings,
             } catch (...) {
             }
         });
-        gear.Click([](auto const&, auto const&) {
+        gear.Click([settingsTopic](auto const&, auto const&) {
             HideHoverPopup();  // A pinned panel stays.
             if (g_unloading) return;
             try {
-                OpenSettingsWindow();
+                OpenSettingsWindow(std::nullopt, settingsTopic);
             } catch (...) {
             }
         });
@@ -31519,6 +31875,7 @@ PCWSTR ZoneKeyword(ModSettings::ZoneKind kind) {
         case K::End: return L"end";
         case K::SysLeft: return L"sysleft";
         case K::SysRight: return L"sysright";
+        case K::Primary: return L"primary";
         default: return L"";
     }
 }
@@ -31809,7 +32166,7 @@ constexpr UiTopicPlace kUiTopics[] = {
     {L"Exchange rate settings", L"Exchange rate", nullptr},
     {L"Battery settings", L"Battery", nullptr},
     {L"Sensor settings", L"Sensors", nullptr},
-    {L"Ping settings", L"Network", L"Ping"},
+    {L"Ping settings", L"Ping", nullptr},
     {L"Battery settings", L"Battery", L"Time and health"},
     {L"Privacy settings", L"Privacy", nullptr},
 };
@@ -32014,7 +32371,7 @@ const std::vector<UiPage>& UiPages() {
             {L"colors.criticalColor", K::Text, L"Critical color",
              L"#RRGGBB. For readings past their hot or full level (Sensors "
              L"▸ Alerts)."},
-            {L"colors.alertStyle", K::Choice, L"Level colors",
+            {L"colors.alertStyle", K::Choice, L"How warning colors change",
              L"Gradually: a reading starts to tint before its warning level "
              L"and shifts on toward the critical color. In steps: it changes "
              L"color only at the two levels. High contrast always uses steps.",
@@ -32025,7 +32382,7 @@ const std::vector<UiPage>& UiPages() {
             {L"motion.animate", K::Toggle, L"Fade between colors",
              L"A reading's color fades into the next one instead of "
              L"switching. Follows Windows' own Animation effects switch."}}},
-          {L"Values",
+          {L"Value formats",
            {{L"formats.ramFormat", K::Choice, L"RAM", L"",
              {{L"percent", L"Percentage (62%)"},
              {L"used", L"Used (19.5G)"},
@@ -32062,7 +32419,7 @@ const std::vector<UiPage>& UiPages() {
              {L"keep", L"Keep as it is"}}}}}}},
         {L"Battery", 0xE83F,
          {{L"Shape",
-           {{L"battery.style", K::Choice, L"Style", L"",
+           {{L"battery.style", K::Choice, L"Battery style", L"",
              {{L"icon", L"Windows icon"},
               {L"bar", L"Bar"},
               {L"pill", L"Pill"},
@@ -32070,7 +32427,7 @@ const std::vector<UiPage>& UiPages() {
               {L"badge", L"Badge (number inside)"},
               {L"vertical", L"Vertical"},
               {L"rounded", L"Rounded (soft corners, no tip)"}}},
-            {L"battery.percent", K::Choice, L"Percentage", L"",
+            {L"battery.percent", K::Choice, L"Percentage position", L"",
              {{L"after", L"After the shape"},
               {L"before", L"Before the shape"},
               {L"inside", L"Inside the shape"},
@@ -32084,7 +32441,7 @@ const std::vector<UiPage>& UiPages() {
              {{L"system", L"System"},
               {L"steps", L"Steps"},
               {L"smooth", L"Smooth"}}},
-            {L"battery.colors", K::Text, L"Level colors",
+            {L"battery.colors", K::Text, L"Battery level colors",
              L"Level:color pairs, such as 30:red, 60:yellow, 100:green."},
             {L"battery.colorText", K::Toggle, L"Color the percentage too",
              L"The percentage beside the shape takes the level color."}}},
@@ -32102,7 +32459,7 @@ const std::vector<UiPage>& UiPages() {
             {L"battery.chargeLimit", K::Number, L"Charge limit",
              L"Your laptop's limit, so time to full counts to it.", {}, 20,
              100, 5, L"%"},
-            {L"battery.healthFormat", K::Choice, L"Health", L"",
+            {L"battery.healthFormat", K::Choice, L"Battery health as", L"",
              {{L"percent", L"Percentage of new"},
               {L"capacity", L"Capacity (Wh)"}}}}}}},
         {L"Position", 0xE7F4,
@@ -32119,7 +32476,20 @@ const std::vector<UiPage>& UiPages() {
             {L"position.monitor", K::Number, L"Taskbar monitor",
              L"Which display's taskbar has the widget; 1 is the primary one.", {}, 1, 8, 1, L""}}},
           {L"Placement",
-           {{L"position.centerWithApps", K::Choice,
+           {{L"position.primaryPin", K::Choice, L"Primary zone",
+             L"Auto-align follows Windows' taskbar alignment: with the "
+             L"Start button centered (the default) the Primary zone sits at "
+             L"the far left; with Start aligned left it moves to the middle, "
+             L"clear of Start and Search. Pinned keeps it at the far left "
+             L"either way, shifting Start and the app buttons right to make "
+             L"room.",
+             {{L"auto", L"Auto-align"}, {L"left", L"Pinned to the far left"}}},
+            {L"position.autoCompact", K::Toggle, L"Compact when space is tight",
+             L"When a zone does not fit the taskbar, it first switches to a "
+             L"compact look (icons for row labels, short units, tighter "
+             L"gaps) before it is drawn smaller, and goes back to its full "
+             L"look once there is room again."},
+            {L"position.centerWithApps", K::Choice,
              L"Center zone with centered apps",
              L"Where the Center zone goes when the app buttons are centered.",
              {{L"leftEdge", L"Move to the left edge"},
@@ -32246,13 +32616,23 @@ const std::vector<UiPage>& UiPages() {
              {{L"off", L"Hide"}, {L"on", L"Show"}},
              0, 0, 1, L"", L"details.enabled", L"1",
              L"Show details"},
-            {L"details.valueAlign", K::Choice, L"Values",
+            {L"details.valueAlign", K::Choice, L"Value position in the panel",
              L"For every topic: at the right edge, or in a column right "
              L"after the names.",
              {{L"right", L"Right edge"}, {L"left", L"Next to the names"}},
              0, 0, 1, L"", L"details.enabled", L"1", L"Show details"}}},
           {L"Motion",
-           {{L"details.animation", K::Choice, L"Animation", L"",
+           {{L"details.motionFeel", K::Choice, L"Motion feel",
+             L"How the panel opens, follows the pointer and switches between "
+             L"widgets, all in one choice. Windows is close to the taskbar's "
+             L"own panels; Snappy is quicker; Relaxed glides more slowly. "
+             L"Custom shows each motion setting on its own.",
+             {{L"windows", L"Windows"},
+              {L"snappy", L"Snappy"},
+              {L"relaxed", L"Relaxed"},
+              {L"custom", L"Custom"}},
+             0, 0, 1, L"", L"details.enabled", L"1", L"Show details"},
+            {L"details.animation", K::Choice, L"Animation", L"",
              {{L"windows", L"Windows (like the taskbar's own panels)"},
              {L"expressive", L"Expressive"},
              {L"unfold", L"Unfold"},
@@ -32317,7 +32697,7 @@ const std::vector<UiPage>& UiPages() {
              {L"1000", L"Every second"},
              {L"2000", L"Every 2 seconds"}},
              0, 0, 1, L"", L"details.enabled", L"1", L"Show details"},
-            {L"details.appsEvery", K::Choice, L"CPU, disk and GPU apps",
+            {L"details.appsEvery", K::Choice, L"Busiest apps: CPU, disk and GPU",
              L"How often the busiest apps are measured in the details. A "
              L"longer time reads steadily, so the apps stop swapping places "
              L"all the time. The readings themselves keep their own speed.",
@@ -32326,7 +32706,7 @@ const std::vector<UiPage>& UiPages() {
              {L"3", L"Every 3 seconds"},
              {L"5", L"Every 5 seconds"}},
              0, 0, 1, L"", L"details.enabled", L"1", L"Show details"},
-            {L"details.appsMemoryEvery", K::Choice, L"Memory apps",
+            {L"details.appsMemoryEvery", K::Choice, L"Busiest apps: memory",
              L"How often the apps using the most memory are measured, apart "
              L"from the CPU list.",
              {{L"1", L"Every second"},
@@ -32345,23 +32725,23 @@ const std::vector<UiPage>& UiPages() {
              {{L"city", L"City"},
              {L"district", L"District and city"},
              {L"neighborhood", L"Neighborhood and city"}}},
-            {L"weather.unit", K::Choice, L"Unit", L"",
+            {L"weather.unit", K::Choice, L"Temperature unit", L"",
              {{L"celsius", L"Celsius"}, {L"fahrenheit", L"Fahrenheit"}}},
-            {L"weather.label", K::Choice, L"Label", L"",
+            {L"weather.label", K::Choice, L"Weather label", L"",
              {{L"condition", L"Conditions"},
              {L"place", L"Place name"},
              {L"both", L"Place and conditions"},
              {L"none", L"None"}}},
             {L"weather.language", K::Choice, L"Conditions language", L"",
              {{L"en", L"English"}, {L"id", L"Indonesian"}}},
-            {L"weather.align", K::Choice, L"Alignment",
+            {L"weather.align", K::Choice, L"Weather text alignment",
              L"Where the weather text sits in its room. Automatic leans toward "
              L"what the widget sits against (Start or the tray on its right).",
              {{L"auto", L"Automatic"},
              {L"left", L"Left"},
              {L"center", L"Center"},
              {L"right", L"Right"}}},
-            {L"weather.every", K::Choice, L"Update every",
+            {L"weather.every", K::Choice, L"Update the weather every",
              L"Also at once on another network (with the automatic place) "
              L"and with Update now below.",
              {{L"15", L"15 minutes"},
@@ -32379,46 +32759,14 @@ const std::vector<UiPage>& UiPages() {
          {{L"Exchange rate",
            {{L"currency.base", K::Text, L"From", L"USD, EUR, SGD..."},
             {L"currency.quote", K::Text, L"To", L"EUR, GBP, JPY..."},
-            {L"currency.label", K::Choice, L"Label", L"",
+            {L"currency.label", K::Choice, L"Rate label", L"",
              {{L"pair", L"Pair (USD/EUR)"}, {L"base", L"From only (USD)"}}},
-            {L"currency.colors", K::Choice, L"Colors", L"",
+            {L"currency.colors", K::Choice, L"Rise and fall colors", L"",
              {{L"upGreen", L"Rise in green"},
              {L"upRed", L"Rise in red"},
              {L"off", L"No colors"}}}}}}},
-        {L"Network", 0xE701,
-         {{L"Speeds",
-           {{L"formats.networkStyle", K::Choice, L"Speed style",
-             L"For download, upload and combined speeds.",
-             {{L"full", L"Full (0.3 KB/s)"}, {L"compact", L"Compact (0.3K)"}}},
-            {L"formats.networkUnit", K::Choice, L"Speed unit", L"",
-             {{L"bytes", L"Bytes (MB/s)"}, {L"bits", L"Bits (Mbps)"}}},
-            {L"formats.networkScale", K::Choice, L"Speed scale",
-             L"By size moves from KB/s to MB/s as the speed grows; a fixed "
-             L"scale keeps one unit, so 1.5 MB/s reads 1536 KB/s.",
-             {{L"auto", L"By size"},
-              {L"kilo", L"Always KB/s (Kbps)"},
-              {L"mega", L"Always MB/s (Mbps)"}}},
-            {L"formats.usageScale", K::Choice, L"Data used scale",
-             L"For usage and usagemonth on the taskbar.",
-             {{L"auto", L"By size"},
-              {L"mega", L"Always MB"},
-              {L"giga", L"Always GB"}}}}},
-          {L"Data used in the details",
-           {{L"dataUsage.hoverRows", K::Choice, L"Periods listed",
-             L"\x1" L"What the details popup shows for data used.",
-             {{L"both", L"Today and this month"},
-              {L"today", L"Today only"},
-              {L"month", L"This month only"}}},
-            {L"dataUsage.hoverNetworks", K::Choice, L"Per-network rows",
-             L"Data used on each network, shown once more than one was used.",
-             {{L"all", L"Show"},
-              {L"off", L"Hide"}}},
-            {L"dataUsage.hoverChart", K::Choice, L"Usage chart",
-             L"The last 14 days as a chart, with the earlier months, under "
-             L"the readings. The Data usage report has the same and more.",
-             {{L"off", L"Hide"},
-              {L"on", L"Show"}}}}},
-          {L"Ping",
+        {L"Ping", 0xE909,
+         {{L"Ping",
            {{L"ping.host", K::Text, L"Ping target",
              L"An IPv4 address, such as 1.1.1.1 (Cloudflare) or 8.8.8.8 "
              L"(Google). Names are not looked up. Some networks and "
@@ -32459,7 +32807,40 @@ const std::vector<UiPage>& UiPages() {
              L"signal bars that fill up as the ping gets better. Tray icons "
              L"are only about 16 pixels, so simple shapes stay sharper.",
              {{L"dot", L"Dot"}, {L"ring", L"Ring"}, {L"bars", L"Signal bars"}},
-             0, 0, 1, L"", L"ping.tray", L"on", L"Notification area icon: On"}}},
+             0, 0, 1, L"", L"ping.tray", L"on", L"Icon in the notification area: On"}}}}},
+        {L"Network", 0xE701,
+         {{L"Speeds",
+           {{L"formats.networkStyle", K::Choice, L"Speed style",
+             L"For download, upload and combined speeds.",
+             {{L"full", L"Full (0.3 KB/s)"}, {L"compact", L"Compact (0.3K)"}}},
+            {L"formats.networkUnit", K::Choice, L"Speed unit", L"",
+             {{L"bytes", L"Bytes (MB/s)"}, {L"bits", L"Bits (Mbps)"}}},
+            {L"formats.networkScale", K::Choice, L"Speed scale",
+             L"By size moves from KB/s to MB/s as the speed grows; a fixed "
+             L"scale keeps one unit, so 1.5 MB/s reads 1536 KB/s.",
+             {{L"auto", L"By size"},
+              {L"kilo", L"Always KB/s (Kbps)"},
+              {L"mega", L"Always MB/s (Mbps)"}}},
+            {L"formats.usageScale", K::Choice, L"Data used scale",
+             L"For usage and usagemonth on the taskbar.",
+             {{L"auto", L"By size"},
+              {L"mega", L"Always MB"},
+              {L"giga", L"Always GB"}}}}},
+          {L"Data used in the details",
+           {{L"dataUsage.hoverRows", K::Choice, L"Periods listed",
+             L"\x1" L"What the details popup shows for data used.",
+             {{L"both", L"Today and this month"},
+              {L"today", L"Today only"},
+              {L"month", L"This month only"}}},
+            {L"dataUsage.hoverNetworks", K::Choice, L"Per-network rows",
+             L"Data used on each network, shown once more than one was used.",
+             {{L"all", L"Show"},
+              {L"off", L"Hide"}}},
+            {L"dataUsage.hoverChart", K::Choice, L"Usage chart",
+             L"The last 14 days as a chart, with the earlier months, under "
+             L"the readings. The Data usage report has the same and more.",
+             {{L"off", L"Hide"},
+              {L"on", L"Show"}}}}},
           {L"Speed test in the details",
            {{L"speedtest.hover", K::Choice, L"Speed test",
              L"One slim line in the Network details: Run speed test, the "
@@ -32519,7 +32900,7 @@ const std::vector<UiPage>& UiPages() {
             {L"alerts.memoryCriticalPercent", K::Number, L"Memory full",
              L"RAM and VRAM.", {}, 51, 100, 1, L"%"}}},
           {L"Updates",
-           {{L"refresh.updateIntervalMs", K::Number, L"Update every",
+           {{L"refresh.updateIntervalMs", K::Number, L"Update readings every",
              L"How often readings refresh. A number after a reading's name "
              L"(cpu250) gives it its own pace.",
              {}, 250, 5000, 250, L" ms"},
@@ -32527,7 +32908,7 @@ const std::vector<UiPage>& UiPages() {
              L"Evens out quick jumps over about this long. 0 shows every "
              L"sample as it is.", {}, 0,
              5000, 250, L" ms"},
-            {L"refresh.hideZeroMs", K::Number, L"Hide while zero after",
+            {L"refresh.hideZeroMs", K::Number, L"Wait before hiding a zero",
              L"For readings set to hide while zero: how long they must read "
              L"zero first. Short hides sooner but can flicker.",
              {}, 0, 10000, 500, L" ms"}}},
@@ -32596,9 +32977,9 @@ const std::vector<UiPage>& UiPages() {
             // "Hide device and user name" (privacyHideSystem) is hidden
             // until it is wired up.
            }},
-          {L"Tray icon",
-           {{L"privacyTrayIconMode", K::Choice, L"Tray icon",
-             L"An eye icon in the system tray shows the privacy state. Click "
+          {L"Notification area icon",
+           {{L"privacyTrayIconMode", K::Choice, L"Icon in the notification area",
+             L"An eye icon in the notification area shows the privacy state. Click "
              L"it to turn privacy mode on or off; right-click for a menu.",
              {{L"active_only", L"Only when active"},
               {L"always", L"Always show"},
@@ -32654,6 +33035,7 @@ const std::vector<UiTopEntry>& UiTopEntries() {
         {L"Network", 0xE701, {}},
         {L"Weather", 0xE753, {}},
         {L"Exchange rate", 0xE8C7, {}},
+        {L"Ping", 0xE909, {}},
         {L"Sensors", 0xE950, {}},
         {L"Privacy", 0xE72E, {}},
         {L"About", 0xE946, {}},
@@ -32811,7 +33193,7 @@ struct UiLivePreview {
     // be dark while this window is light).
     TextBlock themeNote{nullptr};
     // By ModSettings::ZoneKind; made when a zone first has readings.
-    std::array<UiPreviewZone, 9> zones;
+    std::array<UiPreviewZone, ModSettings::kZoneKindCount> zones;
     std::vector<int> shown;  // The kinds in the strip, left to right.
     std::array<SolidColorBrush, 2> alertBrushes{nullptr, nullptr};
     SolidColorBrush textBrush{nullptr};
@@ -32906,7 +33288,7 @@ struct UiWindowState {
     // Whether each row (by zone) is drawn unfolded, kept across redraws of
     // the page so a row that changes state glides instead of being rebuilt
     // in its new shape; unknown when the page is entered.
-    std::array<bool, 9> rowOpen{};
+    std::array<bool, ModSettings::kZoneKindCount> rowOpen{};
     bool rowKnown = false;
     // Each row's height as last shown and its speed, kept across redraws
     // so a redraw in the middle of a change does not cut the glide.
@@ -32918,7 +33300,7 @@ struct UiWindowState {
         double artH = 0;  // The readings' own height, kept while it moves.
         bool active = false;
     };
-    std::array<RowGlide, 9> rowGlide{};
+    std::array<RowGlide, ModSettings::kZoneKindCount> rowGlide{};
     // Settings pages with the keyboard: the card it is on.
     int cardPick = -1;
     bool cardNav = false;
@@ -32940,6 +33322,8 @@ struct UiWindowState {
     // Undo puts back: the readings, the default style and look settings
     // as stored before (empty: not set).
     std::wstring notice;
+    // The notice's Undo is the window's own (Ctrl+Z), not a preset's.
+    bool noticeHistoryUndo = false;
     struct Undo {
         std::wstring items, layout;
         std::vector<std::pair<std::wstring, std::wstring>> stored;
@@ -32967,6 +33351,18 @@ struct UiWindowState {
     DispatcherTimer historyTimer{nullptr};
     // Readings page: says when the taskbar is too full (see ZoneFit).
     TextBlock fitNotice{nullptr};
+    // Its one-click fixes: Use compact style, Show zone.
+    StackPanel fitActions{nullptr};
+    Button fitCompact{nullptr};
+    // Readings: the scrolled-through zone's header kept at the top.
+    Border sticky{nullptr};
+    TextBlock stickyText{nullptr};
+    std::optional<ModSettings::ZoneKind> stickyKind;
+    // The live preview's simulation (Look page): 0 live readings, 1 every
+    // level reading at Warning, 2 at Critical. The preview only (the
+    // taskbar is untouched), and back to live when the window closes
+    // (g_ui is cleared then).
+    int simulate = 0;
     Button undoButton{nullptr}, redoButton{nullptr}, historyButton{nullptr};
     Button privacyButton{nullptr};  // Quick toggle of privacyModeMaster.
     TextBlock privacyAutoStatus{nullptr};  // Privacy page: what was detected.
@@ -33154,11 +33550,39 @@ Border UiCard(const std::wstring& title, const std::wstring& description,
 // Some settings make others matter; changing them redraws the page so
 // those show as available or dimmed.
 bool UiIsDependency(PCWSTR key) {
+    // Motion feel shows or hides the motion settings under it.
+    if (wcscmp(key, L"details.motionFeel") == 0) return true;
     for (const auto& page : UiPages()) {
         for (const auto& section : page.sections) {
             for (const auto& s : section.settings) {
                 if (s.needsKey && wcscmp(s.needsKey, key) == 0) return true;
             }
+        }
+    }
+    return false;
+}
+
+// Settings that belong to About ▸ Labs: hidden (not dimmed) on their pages,
+// in search and in "Reset this page" while Labs is off. Their stored values
+// stay; LoadSettings bypasses them meanwhile.
+constexpr PCWSTR kUiLabKeys[] = {L"position.startMovable",
+                                 L"position.centerWithApps",
+                                 L"position.otherMonitors"};
+
+bool UiIsLabSetting(PCWSTR key) {
+    for (PCWSTR lab : kUiLabKeys) {
+        if (wcscmp(lab, key) == 0) return true;
+    }
+    return false;
+}
+
+// Whether a setting is left out of the window right now: a Labs setting
+// without Labs, or a motion setting while Motion feel is a preset.
+bool UiSettingHidden(const UiSetting& s) {
+    if (UiIsLabSetting(s.key)) return !g_labs;
+    for (PCWSTR key : kMotionKeys) {
+        if (wcscmp(key, s.key) == 0) {
+            return GetStringSetting(L"details.motionFeel") != L"custom";
         }
     }
     return false;
@@ -33185,6 +33609,52 @@ void UiDebounce(std::function<void()> action) {
     g_ui.debounce.Start();
 }
 
+// What is wrong with a value typed into a text setting, in a few words
+// (empty: it is fine, or the setting takes any text). Empty text is always
+// fine: it means the default. Shown under the box while typing; a value
+// with a problem is not saved until it is fixed.
+std::wstring UiTextProblem(PCWSTR key, const std::wstring& raw) {
+    size_t first = raw.find_first_not_of(L" \t");
+    if (first == std::wstring::npos) return {};
+    std::wstring text = raw.substr(first, raw.find_last_not_of(L" \t") - first + 1);
+    auto is = [key](PCWSTR name) { return wcscmp(key, name) == 0; };
+    if (is(L"currency.base") || is(L"currency.quote")) {
+        bool letters = text.size() == 3 &&
+                       std::all_of(text.begin(), text.end(), [](wchar_t c) {
+                           return std::iswalpha(c) && c < 128;
+                       });
+        return letters ? L"" : L"A 3-letter currency code, such as USD or EUR";
+    }
+    if (is(L"colors.textColor") || is(L"colors.warningColor") ||
+        is(L"colors.criticalColor") || is(L"privacyTrayActiveColor") ||
+        is(L"privacyTrayIdleColor")) {
+        return ParseColor(text) ? L""
+                                : L"A color as #RRGGBB, such as #FF8800";
+    }
+    if (is(L"ping.host")) {
+        int parts = 0;
+        bool ok = true;
+        for (const std::wstring& part : SplitText(text, L'.')) {
+            ++parts;
+            ok = ok && !part.empty() && part.size() <= 3 &&
+                 std::all_of(part.begin(), part.end(),
+                             [](wchar_t c) { return c >= L'0' && c <= L'9'; }) &&
+                 _wtoi(part.c_str()) <= 255;
+        }
+        return ok && parts == 4
+                   ? L""
+                   : L"An IPv4 address, such as 1.1.1.1 (names are not looked up)";
+    }
+    if (is(L"position.moveHotkey") || is(L"details.openHotkey")) {
+        std::wstring reason;
+        if (ParseMoveHotkey(text, &reason)) return {};
+        return reason.empty() ? std::wstring(L"Not a key combination, such as "
+                                             L"Ctrl+Alt+M")
+                              : reason + L" (such as Ctrl+Alt+M)";
+    }
+    return {};
+}
+
 UIElement UiControl(const UiSetting& s) {
     std::wstring value = UiValue(s);
     const UiSetting* setting = &s;  // Pages are static.
@@ -33200,7 +33670,7 @@ UIElement UiControl(const UiSetting& s) {
                                      RoutedEventArgs const&) {
                 auto self = sender.as<ToggleSwitch>();
                 UiCommit(*setting, self.IsOn() ? L"1" : L"0");
-                if (UiIsDependency(setting->key)) ShowUiPage(g_ui.page);
+                if (UiIsDependency(setting->key)) UiRebuildSoon();
             });
             return toggle;
         }
@@ -33227,7 +33697,7 @@ UIElement UiControl(const UiSetting& s) {
                     return;
                 }
                 UiCommit(*setting, setting->options[index].value);
-                if (UiIsDependency(setting->key)) ShowUiPage(g_ui.page);
+                if (UiIsDependency(setting->key)) UiRebuildSoon();
             });
             return combo;
         }
@@ -33281,8 +33751,10 @@ UIElement UiControl(const UiSetting& s) {
                                                      : UiBrush(0x8B, 255, 255,
                                                                255));
             }
+            // A value with a problem (UiTextProblem) is not saved.
             auto commit = [setting](IInspectable const& sender) {
                 std::wstring text = sender.as<TextBox>().Text().c_str();
+                if (!UiTextProblem(setting->key, text).empty()) return;
                 if (text != UiValue(*setting)) UiCommit(*setting, text);
             };
             box.LostFocus([commit](IInspectable const& sender, auto const&) {
@@ -33295,7 +33767,37 @@ UIElement UiControl(const UiSetting& s) {
                     commit(sender);
                 }
             });
-            return box;
+            if (UiTextProblem(setting->key, L"?").empty()) {
+                return box;  // Any text goes: no hint line.
+            }
+            // A subtle hint under the box while what is typed would not
+            // work, so a mistake is seen before it is saved.
+            StackPanel column;
+            column.Spacing(2);
+            column.Children().Append(box);
+            auto hint = UiText(UiTextProblem(setting->key, value), 11, 400,
+                               1.0, true);
+            hint.MaxWidth(260);
+            hint.Foreground(g_ui.light ? UiBrush(255, 0xB0, 0x3A, 0x2E)
+                                       : UiBrush(255, 0xFF, 0x99, 0xA4));
+            hint.Visibility(hint.Text().empty() ? Visibility::Collapsed
+                                                : Visibility::Visible);
+            column.Children().Append(hint);
+            auto weakHint = winrt::make_weak(hint);
+            box.TextChanged([setting, weakHint](IInspectable const& sender,
+                                                TextChangedEventArgs const&) {
+                try {
+                    auto line = weakHint.get();
+                    if (!line) return;
+                    std::wstring problem = UiTextProblem(
+                        setting->key, sender.as<TextBox>().Text().c_str());
+                    line.Text(problem);
+                    line.Visibility(problem.empty() ? Visibility::Collapsed
+                                                    : Visibility::Visible);
+                } catch (...) {
+                }
+            });
+            return column;
         }
     }
 }
@@ -33591,8 +34093,14 @@ struct UiSlot {
     UiZone kind;
     PCWSTR name;
 };
-constexpr UiSlot kUiSlots[] = {{UiZone::Left, L"Left edge"},
-                               {UiZone::Center, L"Center"},
+// The look of a small icon-only button (defined with the zone rows).
+void UiIconButtonLook(const Button& button, double width = 34,
+                      double height = 30);
+// Primary zone (adaptive) replaces Left edge and Center (1.1.0); those two
+// are kept for set-ups that still use them (see UiSlotShown).
+constexpr UiSlot kUiSlots[] = {{UiZone::Primary, L"Primary zone (adaptive)"},
+                               {UiZone::Left, L"Left edge (legacy)"},
+                               {UiZone::Center, L"Center (legacy)"},
                                {UiZone::AppsLeft, L"Before apps"},
                                {UiZone::Apps, L"After apps"},
                                {UiZone::Tray, L"Before tray"},
@@ -33604,7 +34112,7 @@ PCWSTR UiSlotName(UiZone kind) {
     for (const auto& slot : kUiSlots) {
         if (slot.kind == kind) return slot.name;
     }
-    return L"Left edge";
+    return L"Primary zone (adaptive)";
 }
 
 // Where the main zone sits: its zone name, or the Widget anchor without one.
@@ -33613,6 +34121,38 @@ UiZone MainSlot(const ModSettings& m) {
     return m.anchorCenter ? UiZone::Center
            : m.anchorRight ? UiZone::Tray
                            : UiZone::Left;
+}
+
+// Whether a zone holds at least one reading (dividers alone do not count).
+bool UiSlotHasReadings(const ModSettings& m, UiZone slot) {
+    auto any = [](const std::vector<ModSettings::ItemCell>& cells) {
+        return std::any_of(cells.begin(), cells.end(), [](const auto& c) {
+            return !c.separator && !c.members.empty();
+        });
+    };
+    if (MainSlot(m) == slot) return any(m.cells);
+    for (const auto& zone : m.extraZones) {
+        if (zone.kind == slot && any(zone.cells)) return true;
+    }
+    return false;
+}
+
+// Whether the Readings editor shows a zone's row. The tray-side zones are
+// a Labs feature. Left edge and Center are older zones the Primary zone
+// replaces: shown (with Labs) only while they still hold readings that were
+// not moved into it. A hidden zone's readings stay on the taskbar.
+bool UiSlotShown(const ModSettings& m, UiZone kind) {
+    switch (kind) {
+        case UiZone::SysLeft:
+        case UiZone::SysRight:
+        case UiZone::End:
+            return g_labs;
+        case UiZone::Left:
+        case UiZone::Center:
+            return g_labs && UiSlotHasReadings(m, kind);
+        default:
+            return true;
+    }
 }
 
 std::vector<ModSettings::ItemCell>* SlotCells(ModSettings& m, UiZone slot) {
@@ -33696,19 +34236,28 @@ bool UiNarrow() {
 // The last press inside the options panel (a popup of its own), for the
 // Settings log and for keeping the panel open (see UiShowOptions).
 
+// A redraw is waiting in the queue: more asks join it (it draws the state
+// as it is by then), and a direct ShowUiPage of the same page is skipped.
+bool g_uiRebuildQueued = false;
 void UiRebuildSoonAt(int line) {
-    DiagLog(kDiagSettings, L"redraw asked for (page %d, by line %d)",
-            g_ui.page, line);
+    DiagLog(kDiagSettings, L"redraw asked for (page %d, by line %d)%s",
+            g_ui.page, line, g_uiRebuildQueued ? L", joins the waiting one" : L"");
+    if (g_uiRebuildQueued) return;
     auto queue = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
     // A group's list stays a group's list.
     auto redraw = [] {
+        g_uiRebuildQueued = false;
         if (g_ui.groupList) {
             ShowUiGroupList(*g_ui.groupList);
         } else {
             ShowUiPage(g_ui.page);
         }
     };
-    if (!queue || !queue.TryEnqueue(redraw)) redraw();
+    if (queue && queue.TryEnqueue(redraw)) {
+        g_uiRebuildQueued = true;
+    } else {
+        redraw();
+    }
 }
 
 // Edits the readings. edit gets the edited copy and the picked entry (-1
@@ -33727,6 +34276,7 @@ void UiEditReadings(const std::function<void(ModSettings&, int&)>& edit) {
     g_ui.pickedGroup.reset();
     g_ui.reopenOptions = g_ui.optionsOpen && ordinal >= 0;
     g_ui.notice.clear();  // An Undo would no longer mean what it says.
+    g_ui.noticeHistoryUndo = false;
     g_ui.undo.reset();
     UiRebuildSoon();
 }
@@ -33775,6 +34325,10 @@ ToggleSwitch UiSwitch(bool on, std::function<void(bool)> flip,
     toggle.IsOn(on);
     toggle.OnContent(winrt::box_value(winrt::hstring(onText)));
     toggle.OffContent(winrt::box_value(winrt::hstring(offText)));
+    // Its own width, at the right: without this a switch keeps 154 px
+    // and sits left of the combo boxes' right edge in the same column.
+    toggle.MinWidth(0);
+    toggle.HorizontalAlignment(HorizontalAlignment::Right);
     toggle.Toggled([flip = std::move(flip)](IInspectable const& sender,
                                             RoutedEventArgs const&) {
         try {
@@ -34040,6 +34594,7 @@ void UiGoToHistory(size_t position) {
     g_ui.pickedDivider.reset();
     g_ui.pickedGroup.reset();
     g_ui.notice.clear();
+    g_ui.noticeHistoryUndo = false;
     g_ui.undo.reset();
     if (g_ui.historyNote) g_ui.historyNote.Text(what + L".");
     UiUpdateHistoryButtons();
@@ -34171,10 +34726,8 @@ UIElement UiHistoryBar() {
     StackPanel buttons = HorizontalStack(2);
     auto small = [&](wchar_t glyph, std::function<void()> action) {
         Button button;
-        button.Background(UiBrush(0, 0, 0, 0));
-        button.BorderThickness(Thickness{0, 0, 0, 0});
-        button.Padding(Thickness{9, 7, 9, 7});
         button.Content(UiGlyph(glyph, 14));
+        UiIconButtonLook(button, 36, 32);
         button.Click([action](auto const&, auto const&) {
             try {
                 action();
@@ -34238,8 +34791,14 @@ std::wstring CleanLabel(std::wstring text) {
 
 // The zone new readings go to: the one last focused, else the main one.
 UiZone UiFocusZone() {
-    if (g_ui.focusZone) return *g_ui.focusZone;
-    return MainSlot(*CurrentSettings());
+    auto settings = CurrentSettings();
+    if (g_ui.focusZone && UiSlotShown(*settings, *g_ui.focusZone)) {
+        return *g_ui.focusZone;
+    }
+    // Readings go where they can be seen: the main zone while its row is
+    // shown, else the Primary zone.
+    UiZone main = MainSlot(*settings);
+    return UiSlotShown(*settings, main) ? main : UiZone::Primary;
 }
 
 // Adds a reading to a zone. Next to its kin (the picked reading, or any
@@ -36366,8 +36925,14 @@ void UiTrackDrop(Point pos) {
     if (g_ui.ghostText) g_ui.ghostText.Text(drag.name);
     bool isDivider = !drag.wholeCell && drag.fromEntry < 0 &&
                      (drag.newItem < 0 || drag.newItem == kItemCount);
-    // The ghost: its box, the name on it, and where it goes.
-    auto showGhost = [&](double left, double top, const std::wstring& mark) {
+    // The ghost: purely a shape, no words, one per kind of drop, so the
+    // three cannot be mistaken for each other:
+    //   beside   a crisp upright bar in the gap where it lands;
+    //   join     an outline all round the reading it joins;
+    //   stack    a level bar along the reading's top or bottom edge.
+    // at is in the page's coordinates (previewRoot).
+    enum class GhostShape { Beside, Join, Stack };
+    auto showGhost = [&](GhostShape kind, Rect at) {
         if (!g_ui.dropGhost) return;
         // Letting go here changes nothing (a reading or group back into its
         // own place, as when it is the only one in its zone): no ghost, it
@@ -36376,41 +36941,55 @@ void UiTrackDrop(Point pos) {
             drag.target == drag.fromSlot &&
             (drag.wholeCell || drag.fromEntry < 0 || drag.cellMembers <= 1)) {
             int count = drag.wholeCell ? drag.cellCount : 1;
-            int at = drag.targetCell;
-            if (at < 0) {
+            int place = drag.targetCell;
+            if (place < 0) {
                 const auto* own = SlotCellsConst(*CurrentSettings(), drag.target);
-                at = own ? static_cast<int>(own->size()) : -1;
+                place = own ? static_cast<int>(own->size()) : -1;
             }
-            if (at >= drag.fromCell && at <= drag.fromCell + count) {
+            if (place >= drag.fromCell && place <= drag.fromCell + count) {
                 anim.tgOpacity = 0;
                 return;
             }
         }
-        // A divider's ghost is a divider: a slim upright bar, no name.
         auto shape = g_ui.dropGhost.Children().Size()
                          ? g_ui.dropGhost.Children().GetAt(0)
                                .try_as<XamlRectangle>()
                          : nullptr;
-        double width = isDivider ? 6.0 : drag.width;
-        double height = isDivider ? std::max(drag.height, 24.0) : drag.height;
-        if (isDivider) {
-            left += (drag.width - width) / 2;
-            top += (drag.height - height) / 2;
-        }
+        auto accent = g_ui.light ? UiBrush(255, 0x00, 0x67, 0xC0)
+                                 : UiBrush(255, 0x4C, 0xA2, 0xFF);
+        double width = std::max<double>(at.Width, 1);
+        double height = std::max<double>(at.Height, 1);
         if (shape) {
-            shape.RadiusX(isDivider ? 3 : 9);
-            shape.RadiusY(isDivider ? 3 : 9);
+            if (kind == GhostShape::Join) {
+                double radius = std::min(height, width) / 2;
+                shape.RadiusX(radius);
+                shape.RadiusY(radius);
+                shape.Fill(g_ui.light ? UiBrush(0x18, 0x00, 0x67, 0xC0)
+                                      : UiBrush(0x26, 0x4C, 0xA2, 0xFF));
+                shape.Stroke(accent);
+                shape.StrokeThickness(2);
+            } else {
+                shape.RadiusX(1.5);
+                shape.RadiusY(1.5);
+                shape.Fill(accent);
+                shape.StrokeThickness(0);
+            }
+            shape.StrokeDashArray(Media::DoubleCollection());  // Solid.
         }
+        if (g_ui.dropGhostText) g_ui.dropGhostText.Text(L"");
         g_ui.dropGhost.Width(width);
         g_ui.dropGhost.Height(height);
-        if (g_ui.dropGhostText) {
-            g_ui.dropGhostText.Text(isDivider ? L"" : mark + drag.name);
-        }
-        anim.tgx = left;
-        anim.tgy = top;
+        anim.tgx = at.X;
+        anim.tgy = at.Y;
         anim.tgOpacity = 1;
     };
-    // The row dragged over unfolds. Its readings have no place on screen
+    // The bar beside a reading or block, at its left or right edge.
+    auto besideBar = [](const Rect& r, bool left) {
+        double tall = std::max<double>(r.Height, 18);
+        return Rect{static_cast<float>(left ? r.X - 5 : r.X + r.Width + 2),
+                    static_cast<float>(r.Y + (r.Height - tall) / 2), 3.0f,
+                    static_cast<float>(tall)};
+    };    // The row dragged over unfolds. Its readings have no place on screen
     // until the next layout pass, so for this one move the drop goes to
     // the zone's end; the next move finds the exact spot.
     {
@@ -36498,10 +37077,13 @@ void UiTrackDrop(Point pos) {
                 // only once it is tall enough to have a middle worth the
                 // name; a slimmer one is stacked on from the gap above or
                 // under it instead (outside it, below).
-                constexpr double kHold = 3;
-                double bandX = std::clamp<double>(r.Width * 0.12, 3, 6);
+                // Bands kept narrow so the middle (join) is the easy target,
+                // and a choice held 6 px longer so a slight move of the
+                // mouse does not flip it.
+                constexpr double kHold = 6;
+                double bandX = std::clamp<double>(r.Width * 0.10, 3, 5);
                 double bandY = r.Height >= 20
-                                   ? std::clamp<double>(r.Height * 0.2, 3, 6)
+                                   ? std::clamp<double>(r.Height * 0.18, 3, 5)
                                    : 0.0;
                 auto band = [&](Side s, double size) {
                     if (!same) return size;
@@ -36546,6 +37128,12 @@ void UiTrackDrop(Point pos) {
                                           : oy > ox + 4;
                 side = vertical ? (pos.Y < r.Y ? Side::Above : Side::Below)
                                 : (pos.X < r.X ? Side::Left : Side::Right);
+                // Just off a reading it was joining (the pointer slipped a
+                // few pixels past its edge): still joining.
+                if (same && last == Side::Center && ox <= 4 && oy <= 4 &&
+                    !isDivider) {
+                    side = Side::Center;
+                }
             }
             // A divider only goes between places.
             if (isDivider && side != Side::Left && side != Side::Right) {
@@ -36555,15 +37143,13 @@ void UiTrackDrop(Point pos) {
             // halves, again holding the last choice near the middle.
             bool centerBefore = fx < 0.5;
             if (same && last == Side::Center && side == Side::Center) {
-                centerBefore = drag.lastJoinBefore ? fx < 0.62 : fx < 0.38;
+                centerBefore = drag.lastJoinBefore ? fx < 0.7 : fx < 0.3;
             }
             drag.lastMagnet = magnet->entry;
             drag.lastSide = static_cast<int>(side);
             drag.lastJoinBefore = centerBefore;
             UiZoomPill(magnet->element, true);
             zoomed = true;
-            double midY = r.Y + r.Height / 2 - drag.height / 2;
-            double midX = r.X + r.Width / 2 - drag.width / 2;
             auto join = [&](bool before, bool stack) {
                 drag.joinEntry = magnet->entry;
                 drag.joinBefore = before;
@@ -36597,36 +37183,34 @@ void UiTrackDrop(Point pos) {
                 case Side::Left:
                     if (member > 0 && !isDivider) {
                         join(true, false);
-                        showGhost(r.X - drag.width - 3, midY, L"+ ");
                     } else {
                         drag.targetCell = magnet->cell;
-                        showGhost(r.X - drag.width - 6, midY, L"");
                     }
+                    showGhost(GhostShape::Beside, besideBar(r, true));
                     break;
                 case Side::Right:
                     if (member < count - 1 && !isDivider) {
                         join(false, false);
-                        showGhost(r.X + r.Width + 3, midY, L"+ ");
                     } else {
                         drag.targetCell = magnet->cell + 1;
-                        showGhost(r.X + r.Width + 6, midY, L"");
                     }
+                    showGhost(GhostShape::Beside, besideBar(r, false));
                     break;
                 case Side::Center:
-                    // Over the pill itself, not beside it: passing over a
-                    // pill from its top to its bottom, the ghost goes
-                    // straight down (top, middle, bottom), not round by
-                    // its sides. A little toward the side it joins on.
+                    // The outline goes round the reading it joins.
                     join(centerBefore, false);
-                    showGhost(midX + (centerBefore ? -4 : 4), midY, L"+ ");
+                    showGhost(GhostShape::Join,
+                              Rect{r.X - 3, r.Y - 3, r.Width + 6, r.Height + 6});
                     break;
                 case Side::Above:
                     join(true, true);
-                    showGhost(midX, r.Y - drag.height - 2, L"↕ ");
+                    showGhost(GhostShape::Stack,
+                              Rect{r.X, r.Y - 5, r.Width, 3});
                     break;
                 case Side::Below:
                     join(false, true);
-                    showGhost(midX, r.Y + r.Height + 2, L"↕ ");
+                    showGhost(GhostShape::Stack,
+                              Rect{r.X, r.Y + r.Height + 2, r.Width, 3});
                     break;
             }
             return;
@@ -36635,32 +37219,33 @@ void UiTrackDrop(Point pos) {
         // No reading within reach: before the first block whose middle is right of
         // the pointer, or at the zone's end.
         int cell = -1;
-        double x = 0;
         bool any = false;
-        double lastRight = 0;
-        Rect lastBlock{};
+        Rect lastBlock{}, before{};
         for (const auto& block : g_ui.blocks) {
             if (block.slot != slot.kind) continue;
             Rect r = UiBoundsIn(block.element, g_ui.previewRoot);
             any = true;
-            lastRight = r.X + r.Width;
             lastBlock = r;
             if (cell < 0 && pos.X < r.X + r.Width / 2) {
                 cell = block.firstCell;
-                x = r.X - drag.width - 6;
-                lastBlock = r;
+                before = r;
             }
         }
         drag.targetCell = cell;
-        double top;
-        if (any) {
-            top = lastBlock.Y + lastBlock.Height / 2 - drag.height / 2;
+        Rect bar;
+        if (cell >= 0) {
+            bar = besideBar(before, true);
+        } else if (any) {
+            bar = besideBar(lastBlock, false);
         } else {
             // An empty zone: in its band, after the zone's name.
-            top = area.Y + (std::min<double>(area.Height, 34) - drag.height) / 2;
+            double tall = 20;
+            bar = Rect{area.X + 128,
+                       static_cast<float>(
+                           area.Y + (std::min<double>(area.Height, 34) - tall) / 2),
+                       3.0f, static_cast<float>(tall)};
         }
-        if (cell < 0) x = any ? lastRight + 6 : area.X + 128;
-        showGhost(x, top, L"");
+        showGhost(GhostShape::Beside, bar);
         return;
     }
     // Outside every zone: letting go removes what is dragged, or (from the
@@ -37334,9 +37919,7 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
         row.Children().Append(words);
         Button x;
         x.Content(UiGlyph(0xE711, 12));
-        x.Padding(Thickness{8, 8, 8, 8});
-        x.Background(UiBrush(0, 0, 0, 0));
-        x.BorderThickness(Thickness{0, 0, 0, 0});
+        UiIconButtonLook(x, 32, 32);
         x.VerticalAlignment(VerticalAlignment::Top);
         ToolTipService::SetToolTip(x, winrt::box_value(winrt::hstring(L"Close")));
         x.Click([close](IInspectable const&, RoutedEventArgs const&) { close(); });
@@ -37471,8 +38054,12 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
     const auto& f = settings.format[e];
 
     title(ReadingName(item));
-    target.Children().Append(
-        UiText(std::wstring(L"In Text view: ") + kItemKeys[item], 12, 400, 0.6));
+    {
+        auto keyLine =
+            UiText(std::wstring(L"In Text view: ") + kItemKeys[item], 12, 400, 0.6);
+        keyLine.Margin(Thickness{0, 2, 0, 8});  // Clear of the card below.
+        target.Children().Append(keyLine);
+    }
     {
         // Another reading in the same place, without removing this one and
         // adding the other: its label, size and place stay, the options that
@@ -37531,6 +38118,14 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
         target.Children().Append(buttons);
     }
 
+    // Below the header, what is about this reading comes first: its format,
+    // label and icon, and its behavior; then where it sits; and last, folded,
+    // what shapes its whole group (Style). Each part is filled in the order
+    // of the code below (add and heading write to target) and placed at
+    // the end.
+    StackPanel root = target;
+    StackPanel placePart, lookPart, formatPart, behaviorPart, groupPart;
+    target = placePart;
     heading(L"Place");
     {
         StackPanel order = HorizontalStack(6);
@@ -37575,20 +38170,27 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
         add(L"Joined with the one on its left", join, L"", canJoin);
     }
 
-    heading(L"Look");
+    target = lookPart;
+    heading(L"Label and icon");
     {
         using CM = ModSettings::CellMode;
         std::wstring byDefault =
             settings.layout == WidgetLayoutMode::Cards    ? L"Default (Cards)"
             : settings.layout == WidgetLayoutMode::OneRow ? L"Default (One row)"
                                                           : L"Default (Stacked pairs)";
+        // The group's style is not this reading's own: it goes in the
+        // folded Group part at the end.
+        target = groupPart;
         add(L"Style (its whole group)",
             UiCombo({byDefault, L"Card", L"Row", L"One line each"},
                     static_cast<int>(cell.mode), [](int index) {
                         UiEditPicked([index](ModSettings&, EntryPlace& p, int) {
                             (*p.cells)[p.cell].mode = static_cast<CM>(index);
                         });
-                    }));
+                    }),
+            L"How this reading's group is drawn: every reading joined with "
+            L"it shares this style.");
+        target = lookPart;
         bool custom = !settings.customLabels[e].empty();
         int labelKind = custom                  ? 2
                         : settings.hideLabel[e] ? 3
@@ -37698,6 +38300,11 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
                 L"ping(globe). It has no effect while the icon is None or "
                 L"another reading's.");
         }
+        // A reading's own icon size, value size, value width and alignment
+        // repeat the Look page's settings for one reading: a Labs feature.
+        // Without Labs they are hidden here, and what they are already set
+        // to (size14, icon20, w3, left in Text) still applies.
+        if (g_labs) {
         std::vector<std::wstring> sizes = {L"Like the setting"};
         int sizeIndex = 0;
         for (int size = 9; size <= 20; ++size) {
@@ -37765,9 +38372,11 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
                             }
                         });
                     }));
+        }  // g_labs
     }
 
     // Format, for the kinds that have one.
+    target = formatPart;
     auto formatCombo = [&](const std::wstring& title,
                            std::vector<std::wstring> labels, int selected,
                            std::function<void(ModSettings::EntryFormat&, int)> set) {
@@ -38059,6 +38668,7 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
         add(L"Pair (empty: Exchange rate)", pair);
     }
 
+    target = behaviorPart;
     heading(L"Behavior");
     {
         static constexpr int kRefresh[] = {0, 250, 500, 1000, 2000, 5000};
@@ -38068,6 +38678,34 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
                 current = static_cast<int>(i);
             }
         }
+        int it = settings.ItemOf(e);
+        int kind = GpuKindOf(it);
+        // The notes say what these mean for this kind of reading.
+        bool network = it == kItemDown || it == kItemUp || it == kItemNet;
+        bool dataUsed = it == kItemUsage || it == kItemUsageMonth;
+        bool battery = it == kItemBattery || it == kItemBatteryPower ||
+                       it == kItemBatteryTime || it == kItemBatteryHealth;
+        bool temperature = it == kItemCpuTemp || kind == kItemGpuTemp;
+        bool power = it == kItemCpuPower || kind == kItemGpuPower ||
+                     it == kItemTotalPower;
+        bool gpu = kind == kItemGpu || kind == kItemVram;
+        std::wstring refreshNote =
+            it == kItemWeather
+                ? L"Only how often it is redrawn: the forecast itself is "
+                  L"fetched every 15 minutes to 3 hours (Weather page)."
+            : it == kItemCurrency
+                ? L"Only how often it is redrawn: the rates themselves are "
+                  L"fetched about once an hour."
+            : it == kItemPing
+                ? L"How often the number shown changes; how often the ping is "
+                  L"measured is on the Ping page."
+            : network ? L"Faster shows short bursts; slower evens the speed out."
+            : dataUsed ? L"The total grows slowly; every few seconds is plenty."
+            : battery ? L"Battery figures change slowly; every few seconds is "
+                        L"plenty."
+            : temperature || power
+                ? L"Faster follows quick spikes; slower reads steadier."
+                : L"Faster follows quick changes; slower reads steadier.";
         add(L"Refresh",
             UiCombo({L"Like the setting", L"Every 0.25 s", L"Every 0.5 s",
                      L"Every 1 s", L"Every 2 s", L"Every 5 s"},
@@ -38075,16 +38713,36 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
                         UiEditPicked([index](ModSettings& m, EntryPlace&, int e) {
                             m.rawIntervalMs[e] = kRefresh[index];
                         });
-                    }));
+                    }),
+            refreshNote);
+        std::wstring unavailableNote =
+            it == kItemWeather
+                ? L"Until the first forecast arrives, or while offline."
+            : it == kItemCurrency
+                ? L"Until the first rates arrive, or while offline."
+            : it == kItemPing
+                ? L"While nothing answers (it would read Offline), as on "
+                  L"networks that block ping."
+            : it == kItemConnection ? L"While no network is connected."
+            : network || dataUsed ? L"While no network adapter is up."
+            : battery ? L"On a PC without a battery, such as a desktop."
+            : temperature
+                ? L"Without a temperature source: HWiNFO, or Windows' own "
+                  L"thermal zones."
+            : power ? L"Without a power source: HWiNFO, Windows' Energy Meter "
+                      L"or NVIDIA's driver."
+            : it == kItemFan
+                ? L"Without HWiNFO or an ASUS laptop's fan sensors."
+            : gpu ? L"On a PC without that GPU."
+            : it == kItemDisk ? L"When that disk is not found."
+                              : L"When this PC cannot give it.";
         add(L"Hide while unavailable",
             UiSwitch(settings.hideUnavailable[e], [](bool on) {
                 UiEditPicked([on](ModSettings& m, EntryPlace&, int e) {
                     m.hideUnavailable[e] = on;
                 });
             }),
-            L"No battery, sensor, fan or GPU. In Text: ? after the name.");
-        int it = settings.ItemOf(e);
-        int kind = GpuKindOf(it);
+            unavailableNote + L" In Text: ? after the name.");
         bool zeroMeans = it == kItemBatteryPower || it == kItemCpuPower ||
                          it == kItemTotalPower ||
                          kind == kItemGpuPower || it == kItemDown ||
@@ -38092,17 +38750,73 @@ void BuildPickedOptions(const ModSettings& settings, StackPanel target) {
                          it == kItemDisk || it == kItemUsage ||
                          it == kItemUsageMonth;
         if (zeroMeans) {
+            std::wstring when =
+                it == kItemBatteryPower
+                    ? L"While no power flows in or out, such as when a charge "
+                      L"limit holds the battery on mains."
+                : power ? L"While it reads 0 W, such as a GPU that is asleep."
+                : network ? L"While nothing is moving over the network."
+                : dataUsed ? L"Until some data is used in this period."
+                : it == kItemFan ? L"While the fan is stopped."
+                : it == kItemDisk ? L"While the disk is idle."
+                                  : L"While it reads zero.";
             add(L"Hide while zero",
                 UiSwitch(f.hideZero, [](bool on) {
                     UiEditPicked([on](ModSettings& m, EntryPlace&, int e) {
                         m.format[e].hideZero = on;
                     });
                 }),
-                L"After a moment at zero (2 s; Sensors > Hide while zero "
-                L"after), such as battery power held at 0 W "
-                L"by a charge limit, or a fan that stopped. The widget gets "
-                L"narrower meanwhile. In Text: (hidezero).");
+                when + L" It hides after a moment at zero (2 s by default; "
+                       L"Sensors > Wait before hiding a zero), and the widget "
+                       L"gets narrower meanwhile. In Text: (hidezero).");
         }
+    }
+
+    // Item-specific first, then its place, then the group, folded.
+    target = root;
+    for (const auto& part : {formatPart, lookPart, behaviorPart, placePart}) {
+        root.Children().Append(part);
+    }
+    {
+        // "Group": closed until clicked, kept open while the window is.
+        static bool groupOpen = false;
+        groupPart.Visibility(groupOpen ? Visibility::Visible
+                                       : Visibility::Collapsed);
+        Button toggle;
+        StackPanel face = HorizontalStack(8);
+        face.Children().Append(UiText(L"Group", 14, 600, 1.0));
+        auto chevron = UiGlyph(groupOpen ? 0xE70E : 0xE70D, 11);  // Up / down.
+        chevron.VerticalAlignment(VerticalAlignment::Center);
+        face.Children().Append(chevron);
+        toggle.Content(face);
+        toggle.Background(UiBrush(0, 0, 0, 0));
+        toggle.BorderThickness(Thickness{0, 0, 0, 0});
+        toggle.Padding(Thickness{6, 4, 8, 4});
+        toggle.CornerRadius({4, 4, 4, 4});
+        toggle.Margin(Thickness{-5, 12, 0, 4});
+        ToolTipService::SetToolTip(
+            toggle, winrt::box_value(winrt::hstring(
+                        L"What shapes this reading's whole group, such as its "
+                        L"style")));
+        auto weakPart = winrt::make_weak(groupPart);
+        auto weakChevron = winrt::make_weak(chevron);
+        toggle.Click([weakPart, weakChevron](IInspectable const&,
+                                             RoutedEventArgs const&) {
+            try {
+                groupOpen = !groupOpen;
+                if (auto part = weakPart.get()) {
+                    part.Visibility(groupOpen ? Visibility::Visible
+                                              : Visibility::Collapsed);
+                }
+                if (auto glyph = weakChevron.get()) {
+                    glyph.Glyph(std::wstring(
+                        1, groupOpen ? wchar_t(0xE70E) : wchar_t(0xE70D)));
+                }
+            } catch (...) {
+            }
+        });
+        root.Children().Append(toggle);
+        root.Children().Append(groupPart);
     }
 }
 
@@ -38198,7 +38912,8 @@ std::wstring ZoneFitNoticeText() {
                                         L"Before apps", L"After apps",
                                         L"Center", L"Before tray",
                                         L"After clock", L"Before system icons",
-                                        L"After system icons"};
+                                        L"After system icons",
+                                        L"Primary zone"};
     auto list = [](uint32_t mask) {
         std::wstring text;
         for (size_t i = 0; i < std::size(kNames); ++i) {
@@ -38211,15 +38926,45 @@ std::wstring ZoneFitNoticeText() {
     uint32_t unplaced = g_zonesUnplaced.load();
     uint32_t shrunk = g_zonesShrunk.load() & ~unplaced;
     uint32_t moved = g_zonesMoved.load() & ~unplaced;
-    if (!unplaced && !shrunk && !moved) return {};
+    uint32_t compacted = g_zonesCompact.load() & ~unplaced;
+    if (!unplaced && !shrunk && !moved) {
+        // Compact is the room found, not a problem: a quiet line only.
+        if (!compacted) return {};
+        return L"Drawn compact for lack of room: " + list(compacted) +
+               L". The full look comes back once there is room.";
+    }
     std::wstring text = L"\u26A0 The taskbar has no room for all of this.";
     if (unplaced) text += L" Not shown: " + list(unplaced) + L".";
     if (shrunk) text += L" Shown smaller: " + list(shrunk) + L".";
     if (moved) text += L" Moved to another free gap: " + list(moved) + L".";
-    text += L" Remove or join a few readings, pick a more compact Default "
-            L"style, or left-align the app buttons in Windows (Taskbar "
-            L"behaviors) to get one large gap.";
+    if (compacted) text += L" Drawn compact: " + list(compacted) + L".";
+    text += L" Remove or join a few readings, use a more compact style, or "
+            L"left-align the app buttons in Windows (Taskbar behaviors) to "
+            L"get one large gap.";
     return text;
+}
+
+// The first zone the notice is about (not shown, then smaller, then
+// moved), for its Show zone button.
+std::optional<ModSettings::ZoneKind> ZoneFitFirstProblem() {
+    uint32_t unplaced = g_zonesUnplaced.load();
+    for (uint32_t mask : {unplaced, g_zonesShrunk.load() & ~unplaced,
+                          g_zonesMoved.load() & ~unplaced}) {
+        for (size_t i = 0; i < ModSettings::kZoneKindCount; ++i) {
+            if (mask & (1u << i)) {
+                return static_cast<ModSettings::ZoneKind>(i);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+// Whether the readings already have the compact style the notice's button
+// would give them (icons for row labels, One row).
+bool UiCompactStyleInUse() {
+    auto settings = CurrentSettings();
+    return settings->rowLabels == RowLabelStyle::Icon &&
+           settings->layout == WidgetLayoutMode::OneRow;
 }
 
 // The placement is worked out on the taskbar's thread after each change, so
@@ -38233,6 +38978,26 @@ void UiUpdateFitNotice() {
         text.empty() ? Visibility::Collapsed : Visibility::Visible;
     if (g_ui.fitNotice.Visibility() != visibility) {
         g_ui.fitNotice.Visibility(visibility);
+    }
+    bool problem = ZoneFitFirstProblem().has_value();
+    // A compact-only line is quieter than a warning.
+    if (g_ui.fitNotice.Opacity() != (problem ? 1.0 : 0.7)) {
+        g_ui.fitNotice.Opacity(problem ? 1.0 : 0.7);
+    }
+    // Its buttons, only for a real lack of room.
+    if (g_ui.fitActions) {
+        auto shown = problem ? Visibility::Visible : Visibility::Collapsed;
+        if (g_ui.fitActions.Visibility() != shown) {
+            g_ui.fitActions.Visibility(shown);
+        }
+        if (g_ui.fitCompact) {
+            auto compactShown = problem && !UiCompactStyleInUse()
+                                    ? Visibility::Visible
+                                    : Visibility::Collapsed;
+            if (g_ui.fitCompact.Visibility() != compactShown) {
+                g_ui.fitCompact.Visibility(compactShown);
+            }
+        }
     }
 }
 
@@ -38543,6 +39308,11 @@ void UiShowAdder(UiZone kind, const FrameworkElement& button) {
                 nothing.Visibility(any ? Visibility::Collapsed
                                        : Visibility::Visible);
             }
+            // While typing, the first match is lit: that is what Enter adds.
+            if (!words.empty()) {
+                auto shown = Shown();
+                if (!shown.empty()) Mark(shown.front());
+            }
         }
         void Add(UiZone kind, int index) {
             if (index < 0 || index >= static_cast<int>(choices.size())) return;
@@ -38604,6 +39374,9 @@ void UiShowAdder(UiZone kind, const FrameworkElement& button) {
         } else if (entry.item >= 0 && entry.item < kItemCount) {
             text += L' ';
             text += ReadingName(entry.item);
+            // The name written in Text view too (dgpu, usagemonth...).
+            text += L' ';
+            text += kItemKeys[entry.item];
         }
         state->choices.push_back(
             {capsule, entry, capsule.Background(), ToLower(std::move(text))});
@@ -38722,7 +39495,7 @@ void UiShowAdder(UiZone kind, const FrameworkElement& button) {
     // cursor or else the first match.
     search.PreviewKeyDown(
         [state, kind, weakScroll](
-            IInspectable const&,
+            IInspectable const& sender,
             winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& e) {
             try {
                 using winrt::Windows::System::VirtualKey;
@@ -38734,6 +39507,14 @@ void UiShowAdder(UiZone kind, const FrameworkElement& button) {
                         state->Mark(shown.front());
                     }
                     e.Handled(true);
+                } else if (e.Key() == VirtualKey::Escape) {
+                    // Esc clears what was typed first; once empty it closes
+                    // the panel as usual.
+                    auto box = sender.as<TextBox>();
+                    if (!box.Text().empty()) {
+                        box.Text(L"");
+                        e.Handled(true);
+                    }
                 } else if (e.Key() == VirtualKey::Enter) {
                     bool onShown = std::find(shown.begin(), shown.end(),
                                              state->cursor) != shown.end();
@@ -38800,12 +39581,103 @@ void UiShowAdder(UiZone kind, const FrameworkElement& button) {
     g_ui.adder = flyout;
 }
 
+// A small icon-only button (+, clear, pin, close, undo): a fixed box with
+// the glyph centered and rounded corners, so its pointer-over background
+// is drawn whole. Sized to fit a folded zone row (34 px with its border).
+void UiIconButtonLook(const Button& button, double width, double height) {
+    button.Width(width);
+    button.Height(height);
+    button.MinWidth(0);
+    button.MinHeight(0);
+    button.Padding(Thickness{0, 0, 0, 0});
+    button.Margin(Thickness{0, 0, 0, 0});
+    button.HorizontalContentAlignment(HorizontalAlignment::Center);
+    button.VerticalContentAlignment(VerticalAlignment::Center);
+    button.CornerRadius({4, 4, 4, 4});
+    button.Background(UiBrush(0, 0, 0, 0));
+    button.BorderThickness(Thickness{0, 0, 0, 0});
+}
+
+// 1.1.0: Left edge and Center always become the Primary zone, as one step
+// of the history with a notice at the top of the page:
+//   both in use        Center's readings follow Left edge's, Auto-align;
+//   Left edge only     moved, pinned to the far left as before (a main
+//                      zone without a name, anchored left, auto-aligns);
+//   Center only        moved, Auto-align.
+// Readings already in the Primary zone stay first. Once it has moved
+// something, it does not run again in this Explorer session, so an Undo
+// is not redone behind the user's back.
+bool g_uiPrimaryMigrated = false;
+void UiMigratePrimaryZone() {
+    if (g_uiPrimaryMigrated) return;
+    ModSettings m = *CurrentSettings();
+    if (m.itemsFallback) return;
+    using Z = ModSettings::ZoneKind;
+    Z mainAs = MainSlot(m);  // A main zone without a name, by its anchor.
+    bool hasLeft = UiSlotHasReadings(m, Z::Left);
+    bool hasCenter = UiSlotHasReadings(m, Z::Center);
+    if (!hasLeft && !hasCenter) return;
+    bool hadPrimary = UiSlotHasReadings(m, Z::Primary);
+    std::vector<ModSettings::Zone> all;
+    all.push_back({mainAs, m.cells});
+    for (const auto& zone : m.extraZones) all.push_back(zone);
+    std::vector<ModSettings::ItemCell> merged;
+    auto take = [&](Z kind) {
+        for (const auto& zone : all) {
+            if (zone.kind != kind) continue;
+            merged.insert(merged.end(), zone.cells.begin(), zone.cells.end());
+        }
+    };
+    take(Z::Primary);
+    take(Z::Left);
+    take(Z::Center);
+    std::wstring notice;
+    bool pin = false;
+    if (hasLeft && hasCenter) {
+        notice = L"Merged Left Edge and Center into Primary Zone — use Undo "
+                 L"to revert";
+    } else if (hasLeft) {
+        // A named Left edge zone shifted Start: pinned, it still does.
+        pin = !hadPrimary && m.mainZone == Z::Left;
+        notice = pin ? L"Moved Left Edge into Primary Zone, pinned to the "
+                       L"far left — use Undo to revert"
+                     : L"Moved Left Edge into Primary Zone — use Undo to "
+                       L"revert";
+    } else {
+        notice = L"Moved Center into Primary Zone — use Undo to revert";
+    }
+    m.mainZone = Z::Primary;
+    m.cells = std::move(merged);
+    m.extraZones.clear();
+    for (auto& zone : all) {
+        // Moved into the Primary zone; a zone without a name is never kept
+        // as a side zone.
+        if (zone.kind == Z::Left || zone.kind == Z::Center ||
+            zone.kind == Z::Primary || zone.kind == Z::Default) {
+            continue;
+        }
+        bool empty = !std::any_of(zone.cells.begin(), zone.cells.end(),
+                                  [](const auto& c) { return !c.separator; });
+        if (!empty) m.extraZones.push_back(std::move(zone));
+    }
+    TidyCells(m.cells);
+    g_uiPrimaryMigrated = true;
+    UiFlushHistory();
+    g_history.nextLabel = L"Move readings into the Primary zone";
+    if (pin) SetUiOverride(L"position.primaryPin", L"left", false);
+    SaveMenuItems(m);
+    UiRecordHistory();
+    g_ui.notice = notice;
+    g_ui.noticeHistoryUndo = true;
+    // The rows are drawn from the readings as they are now.
+    g_ui.focusZone = Z::Primary;
+    g_ui.focusNone = false;
+    ModLog(L"Readings: %s", notice.c_str());
+}
 Button UiZoneAddButton(UiZone kind) {
     Button add;
     add.Content(UiGlyph(0xE710, 13));  // Add.
-    add.Padding(Thickness{9, 5, 9, 5});
-    add.Background(UiBrush(0, 0, 0, 0));
-    add.BorderThickness(Thickness{0, 0, 0, 0});
+    UiIconButtonLook(add);
     add.VerticalAlignment(VerticalAlignment::Center);
     add.HorizontalAlignment(HorizontalAlignment::Right);
     ToolTipService::SetToolTip(
@@ -38858,7 +39730,7 @@ void BuildReadingsPreview(const ModSettings& settings) {
     bool centerFirst =
         settings.centerWithApps == ModSettings::CenterWithApps::LeftEdge ||
         settings.centerWithApps == ModSettings::CenterWithApps::LeftOfApps;
-    std::vector<UiZone> order = {UiZone::Left};
+    std::vector<UiZone> order = {UiZone::Primary, UiZone::Left};
     if (centerFirst) order.push_back(UiZone::Center);
     order.push_back(UiZone::AppsLeft);
     order.push_back(UiZone::Apps);
@@ -38867,6 +39739,14 @@ void BuildReadingsPreview(const ModSettings& settings) {
     order.push_back(UiZone::SysLeft);
     order.push_back(UiZone::SysRight);
     order.push_back(UiZone::End);
+    // Zones whose rows are hidden (Labs off): their readings stay on the
+    // taskbar, and a line under the rows says so.
+    std::vector<UiZone> hiddenWithReadings;
+    std::erase_if(order, [&](UiZone kind) {
+        if (UiSlotShown(m, kind)) return false;
+        if (UiSlotHasReadings(m, kind)) hiddenWithReadings.push_back(kind);
+        return true;
+    });
     UiZone focus = UiFocusZone();
     bool haveFocus = !g_ui.focusNone;
     // The picked reading's options live in its zone's card (see below). They
@@ -38950,7 +39830,10 @@ void BuildReadingsPreview(const ModSettings& settings) {
         inside.ColumnSpacing(g_ui.narrow ? 10 : 14);
         // The name column holds "Before system icons" whole; in a narrow
         // window it is slimmer and the name wraps instead of being cut.
-        AddColumns(inside, {GridPx(g_ui.narrow ? 100 : 156), GridStar(),
+        // Wide enough for "Primary zone (adaptive)" on one line. Its
+        // Auto-align / Pin to far left choice is under Position, so the
+        // row's header stays one click target that folds and unfolds it.
+        AddColumns(inside, {GridPx(g_ui.narrow ? 112 : 176), GridStar(),
                             GridPx(38), GridPx(38)});
         auto caption = UiText(UiSlotName(kind), 13, 600, 0.85, true);
         caption.VerticalAlignment(VerticalAlignment::Center);
@@ -39074,11 +39957,15 @@ void BuildReadingsPreview(const ModSettings& settings) {
             // the card's rounded bottom.
             well.CornerRadius({0, 0, 0, 0});
         }
-        TextBlock summary =
-            UiText(emptyZone        ? std::wstring(L"Empty")
-                   : readings == 1 ? std::wstring(L"1 reading")
-                                   : std::to_wstring(readings) + L" readings",
-                   12, 400, emptyZone ? 0.45 : 0.6);
+        std::wstring count = emptyZone       ? std::wstring(L"Empty")
+                             : readings == 1 ? std::wstring(L"1 reading")
+                                             : std::to_wstring(readings) +
+                                                   L" readings";
+        if (kind == UiZone::Primary) {
+            count += settings.primaryPinned ? L" · Pinned to far left"
+                                            : L" · Auto-align";
+        }
+        TextBlock summary = UiText(count, 12, 400, emptyZone ? 0.45 : 0.6);
         summary.VerticalAlignment(VerticalAlignment::Center);
         Grid::SetColumn(summary, 1);
         inside.Children().Append(summary);
@@ -39136,9 +40023,7 @@ void BuildReadingsPreview(const ModSettings& settings) {
         if (auto* zoneCells = SlotCells(m, kind); zoneCells && !zoneCells->empty()) {
             Button clear;
             clear.Content(UiGlyph(0xE74D, 13));  // Delete.
-            clear.Padding(Thickness{9, 5, 9, 5});
-            clear.Background(UiBrush(0, 0, 0, 0));
-            clear.BorderThickness(Thickness{0, 0, 0, 0});
+            UiIconButtonLook(clear);
             clear.VerticalAlignment(VerticalAlignment::Center);
             clear.HorizontalAlignment(HorizontalAlignment::Right);
             ToolTipService::SetToolTip(
@@ -39206,6 +40091,25 @@ void BuildReadingsPreview(const ModSettings& settings) {
         }
     }
     stage.Children().Append(zones);
+    if (!hiddenWithReadings.empty()) {
+        std::wstring names;
+        for (UiZone kind : hiddenWithReadings) {
+            if (!names.empty()) names += L", ";
+            std::wstring name = UiSlotName(kind);
+            if (size_t legacy = name.find(L" (legacy)");
+                legacy != std::wstring::npos) {
+                name.erase(legacy);
+            }
+            names += name;
+        }
+        auto note = UiText(
+            L"Hidden zones have active items (" + names +
+                L") — enable Experimental features in About to edit. They "
+                L"stay on the taskbar meanwhile.",
+            12, 400, 0.65, true);
+        note.Margin(Thickness{2, 6, 0, 0});
+        zones.Children().Append(note);
+    }
     // Rows that should be in another state than they were drawn in glide
     // there once the page is up.
     g_ui.rowKnown = true;
@@ -39298,7 +40202,9 @@ void BuildReadingsPreview(const ModSettings& settings) {
         L"its own place there, on the middle joins them, above or below "
         L"stacks them one line each; a dashed ghost shows where it lands. "
         L"Drop it outside the zones to remove it. Click or "
-        L"right-click a reading for its options.",
+        L"right-click a reading for its options. With a reading picked, "
+        L"Alt+Left and Alt+Right move it, Alt+Down stacks it with the next "
+        L"one and Alt+Up takes it out of its group.",
         12, 400, 0.6, true);
     hint.Margin(Thickness{2, 4, 0, 0});
 
@@ -39619,8 +40525,9 @@ std::wstring UiPieceMeaning(const std::wstring& text, size_t pos) {
     // A zone name and its colon in front.
     {
         static constexpr std::pair<PCWSTR, PCWSTR> kZoneNames[] = {
-            {L"left", L"Zone: left edge"},
-            {L"center", L"Zone: center"},
+            {L"primary", L"Zone: primary (adaptive, follows Start)"},
+            {L"left", L"Zone: left edge (legacy)"},
+            {L"center", L"Zone: center (legacy)"},
             {L"appsleft", L"Zone: before apps"},
             {L"apps", L"Zone: after apps"},
             {L"tray", L"Zone: before tray"},
@@ -39968,10 +40875,11 @@ void BuildReadingsText(const ModSettings& settings) {
             PCWSTR key, meaning;
         };
         static constexpr Named kAll[] = {
-            {L"left", L"Zone: left edge"},
+            {L"primary", L"Zone: primary (adaptive, follows Start)"},
+            {L"left", L"Zone: left edge (legacy)"},
             {L"appsleft", L"Zone: before apps"},
             {L"apps", L"Zone: after apps"},
-            {L"center", L"Zone: center"},
+            {L"center", L"Zone: center (legacy)"},
             {L"tray", L"Zone: before tray"},
             {L"sysleft", L"Zone: before system icons"},
             {L"sysright", L"Zone: after system icons"},
@@ -40287,7 +41195,9 @@ void BuildReadingsText(const ModSettings& settings) {
             PCWSTR key, meaning;
         };
         static constexpr Named kZones[] = {
-            {L"left", L"Zone: left edge"},     {L"center", L"Zone: center"},
+            {L"primary", L"Zone: primary (adaptive)"},
+            {L"left", L"Zone: left edge (legacy)"},
+            {L"center", L"Zone: center (legacy)"},
             {L"appsleft", L"Zone: before apps"}, {L"apps", L"Zone: after apps"},
             {L"tray", L"Zone: before tray"},
             {L"sysleft", L"Zone: before system icons"},
@@ -40503,14 +41413,16 @@ void BuildReadingsText(const ModSettings& settings) {
 
 PCWSTR PresetBlurb(const std::wstring& key) {
     if (key == L"minimalist") {
-        return L"The most compact look for every day, without crowding the "
-               L"taskbar";
+        return L"CPU, memory and network on one line, the weather by the "
+               L"clock; battery power only while it flows";
     }
     if (key == L"balanced") {
-        return L"A balance of the main system readings and a tidy look";
+        return L"CPU, memory, GPU and battery with their temperatures, "
+               L"stacked in pairs; what this PC lacks hides itself";
     }
     if (key == L"heavy") {
-        return L"Full monitoring for heavy workloads and gaming";
+        return L"Everything for heavy work and gaming: power, fans, disks, "
+               L"ping, plus battery and weather by the clock";
     }
     return L"";
 }
@@ -40635,6 +41547,9 @@ std::optional<std::wstring> SavePresetFile(const std::wstring& name,
     text += L"name=" + EscapeBackup(name) + L"\n";
     text += L"items=" + EscapeBackup(SerializeItems(*settings)) + L"\n";
     text += L"layout=" + layout + L"\n";
+    // Where the Primary zone sits, so the preset looks the same on any PC.
+    text += std::wstring(L"primaryPin=") +
+            (settings->primaryPinned ? L"left" : L"auto") + L"\n";
     if (withLook) {
         for (const auto& kept : kKeptSettings) {
             if (!IsLookSetting(kept.key)) continue;
@@ -40675,33 +41590,51 @@ std::wstring RenamePresetFile(const std::wstring& path,
     return L"Renamed “" + oldName + L"” to “" + newName + L"”.";
 }
 
+// Writes a preset's values to storage: readings, default style, where the
+// Primary zone sits, and the look when it has one. No window needed (the
+// auto-switch uses it from the taskbar's thread); the caller reloads.
+// Returns the look settings changed, with what they were.
+std::vector<std::pair<std::wstring, std::wstring>> ApplyPresetCore(
+    const std::map<std::wstring, std::wstring>& values) {
+    std::vector<std::pair<std::wstring, std::wstring>> before;
+    for (const auto& [key, value] : values) {
+        if (key.rfind(L"look.", 0) != 0) continue;
+        std::wstring setting = key.substr(5);
+        const KeptSetting* kept = FindKept(setting.c_str());
+        if (!kept || !IsLookSetting(setting)) continue;
+        before.emplace_back(setting, ReadStored(L"ui." + setting));
+        SetUiOverride(kept->key, value, kept->isInt);
+    }
+    if (auto it = values.find(L"items"); it != values.end()) {
+        std::wstring items = it->second;
+        items.erase(std::remove_if(items.begin(), items.end(),
+                                   [](wchar_t c) { return c == L'\r' || c == L'\n'; }),
+                    items.end());
+        if (items.size() > 32000) items.resize(32000);
+        Wh_SetStringValue(L"menu.items", StripLineBreaks(items).c_str());
+    }
+    if (auto it = values.find(L"layout"); it != values.end()) {
+        Wh_SetStringValue(L"menu.layout", StripLineBreaks(it->second).c_str());
+    }
+    if (auto it = values.find(L"primaryPin"); it != values.end()) {
+        SetUiOverride(L"position.primaryPin",
+                      it->second == L"left" ? L"left" : L"auto", false);
+    }
+    return before;
+}
+
+// The values of a built-in preset, as a preset file would hold them.
+std::map<std::wstring, std::wstring> BuiltInPresetValues(const ItemsPreset& p) {
+    return {{L"items", p.items}, {L"layout", p.layout}, {L"primaryPin", L"auto"}};
+}
+
 // Applies readings, default style and look values, keeping what Undo needs.
 void ApplyPresetValues(const std::wstring& title,
                        const std::map<std::wstring, std::wstring>& values) {
     UiWindowState::Undo undo;
     undo.items = ReadStoredLong(L"menu.items");
     undo.layout = ReadStored(L"menu.layout");
-    for (const auto& [key, value] : values) {
-        if (key.rfind(L"look.", 0) != 0) continue;
-        std::wstring setting = key.substr(5);
-        const KeptSetting* kept = FindKept(setting.c_str());
-        if (!kept || !IsLookSetting(setting)) continue;
-        undo.stored.emplace_back(setting, ReadStored(L"ui." + setting));
-        SetUiOverride(kept->key, value, kept->isInt);
-    }
-    if (auto it = values.find(L"items"); it != values.end()) {
-        {
-            std::wstring items = it->second;
-            items.erase(std::remove_if(items.begin(), items.end(),
-                                       [](wchar_t c) { return c == L'\r' || c == L'\n'; }),
-                        items.end());
-            if (items.size() > 32000) items.resize(32000);
-            Wh_SetStringValue(L"menu.items", StripLineBreaks(items).c_str());
-        }
-    }
-    if (auto it = values.find(L"layout"); it != values.end()) {
-        Wh_SetStringValue(L"menu.layout", StripLineBreaks(it->second).c_str());
-    }
+    undo.stored = ApplyPresetCore(values);
     UiFlushHistory();  // A change still waiting stays its own step.
     g_history.nextLabel = L"Preset " + title;
     ReloadAllSettings();
@@ -40751,6 +41684,212 @@ void ImportPresetFile() {
     ApplyPresetValues(L"“" + title + L"”", *values);
 }
 
+// ---- Presets: auto-switch --------------------------------------------------
+// Three simple rules (Presets ▸ Auto-switch), each a preset or off, kept in
+// the mod's storage:
+//   presets.auto.battery   while on battery power;
+//   presets.auto.load      while the CPU or GPU stays busy (75% or more) or
+//                          a fullscreen app or game runs (high load wins);
+//   presets.auto.default   otherwise; empty means "Manual": the set-up that
+//                          was there before the first switch comes back.
+// A rule is "builtin:<key>" or "file:<name>". Checked with each new sample
+// on the taskbar's own update (no thread or timer of its own); a change of
+// target must hold for 10 s, nothing switches while the settings window is
+// open, and a preset is applied only when the target changes.
+constexpr PCWSTR kAutoKeys[] = {L"presets.auto.default", L"presets.auto.battery",
+                                L"presets.auto.load"};
+std::atomic<bool> g_presetAutoApplied{false};  // Undo history to re-read.
+
+std::optional<std::map<std::wstring, std::wstring>> PresetRuleValues(
+    const std::wstring& rule) {
+    if (rule.rfind(L"builtin:", 0) == 0) {
+        std::wstring key = rule.substr(8);
+        for (const auto& preset : kPresets) {
+            if (key == preset.key) return BuiltInPresetValues(preset);
+        }
+        return std::nullopt;
+    }
+    if (rule.rfind(L"file:", 0) == 0) {
+        std::wstring name = rule.substr(5);
+        for (const auto& file : ListPresetFiles()) {
+            if (_wcsicmp(file.name.c_str(), name.c_str()) == 0) {
+                return ReadPresetFile(file.path);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+// The set-up as it is, as preset values (readings, style, Primary zone and
+// the whole look), kept so "Manual" can bring it back.
+std::map<std::wstring, std::wstring> CurrentPresetValues() {
+    std::map<std::wstring, std::wstring> values;
+    values[L"items"] = ReadStoredLong(L"menu.items");
+    values[L"layout"] = ReadStored(L"menu.layout", 32);
+    values[L"primaryPin"] = GetStringSetting(L"position.primaryPin");
+    for (const auto& kept : kKeptSettings) {
+        if (IsLookSetting(kept.key)) {
+            values[std::wstring(L"look.") + kept.key] = KeptValue(kept);
+        }
+    }
+    return values;
+}
+
+// One value in storage: entries split by \x1E, each key=escaped value.
+std::wstring PackPresetValues(const std::map<std::wstring, std::wstring>& values) {
+    std::wstring text;
+    for (const auto& [key, value] : values) {
+        if (!text.empty()) text += L'\x1E';
+        text += key + L"=" + EscapeBackup(value);
+    }
+    return text;
+}
+std::map<std::wstring, std::wstring> UnpackPresetValues(const std::wstring& text) {
+    std::map<std::wstring, std::wstring> values;
+    for (const std::wstring& entry : SplitText(text, L'\x1E')) {
+        size_t equals = entry.find(L'=');
+        if (equals == std::wstring::npos || equals == 0) continue;
+        values[entry.substr(0, equals)] = UnescapeBackup(entry.substr(equals + 1));
+    }
+    return values;
+}
+
+// Taskbar thread, with each new sample.
+void PresetAutoSwitchTick(const MetricsSnapshot& snapshot) {
+    static std::wstring pending;
+    static ULONGLONG pendingSince = 0;
+    static bool high = false;
+    static bool paused = false;
+    static std::wstring setupAtPause;
+    static ULONGLONG lastIdle = 0, lastBusy = 0;
+    std::wstring rules[3];
+    bool any = false;
+    for (int i = 0; i < 3; ++i) {
+        rules[i] = ReadStored(kAutoKeys[i], 512);
+        any = any || !rules[i].empty();
+    }
+    // CPU load from the system's own times, so it works whether or not the
+    // CPU is one of the readings.
+    double cpu = 0;
+    {
+        FILETIME idleTime{}, kernelTime{}, userTime{};
+        if (GetSystemTimes(&idleTime, &kernelTime, &userTime)) {
+            auto value = [](const FILETIME& t) {
+                return (static_cast<ULONGLONG>(t.dwHighDateTime) << 32) |
+                       t.dwLowDateTime;
+            };
+            ULONGLONG idle = value(idleTime);
+            ULONGLONG busy = value(kernelTime) + value(userTime);  // Includes idle.
+            if (lastBusy && busy > lastBusy) {
+                double total = static_cast<double>(busy - lastBusy);
+                cpu = 100.0 * (1.0 - static_cast<double>(idle - lastIdle) / total);
+            }
+            lastIdle = idle;
+            lastBusy = busy;
+        }
+    }
+    if (!any) {
+        pending.clear();
+        paused = false;
+        return;
+    }
+    auto setupNow = [] {
+        return ReadStoredLong(L"menu.items") + L"\x1E" +
+               ReadStored(L"menu.layout", 32);
+    };
+    // Never while the settings window is open: edits and Undo stay as made.
+    if (g_settingsWindow.load()) {
+        if (!paused) {
+            paused = true;
+            setupAtPause = setupNow();
+        }
+        pending.clear();
+        return;
+    }
+    double gpu = snapshot.gpuAvailable ? snapshot.gpu : 0;
+    double load = std::max(cpu, gpu);
+    if (load >= 75) high = true;
+    else if (load < 65) high = false;  // A band, so it does not flicker.
+    bool fullscreen = false;
+    QUERY_USER_NOTIFICATION_STATE state{};
+    if (SUCCEEDED(SHQueryUserNotificationState(&state))) {
+        fullscreen = state == QUNS_BUSY || state == QUNS_RUNNING_D3D_FULL_SCREEN ||
+                     state == QUNS_PRESENTATION_MODE;
+    }
+    SYSTEM_POWER_STATUS power{};
+    bool onBattery = GetSystemPowerStatus(&power) && power.ACLineStatus == 0;
+    std::wstring target = !rules[2].empty() && (high || fullscreen) ? L"load"
+                          : !rules[1].empty() && onBattery         ? L"battery"
+                                                                   : L"default";
+    std::wstring active = ReadStored(L"presets.auto.active", 32);
+    if (active.empty()) active = L"default";
+    if (paused) {
+        paused = false;
+        // Readings changed in the window while it was open: they belong to
+        // the state the PC is in now, so nothing is switched over them.
+        if (setupNow() != setupAtPause) {
+            Wh_SetStringValue(L"presets.auto.active", target.c_str());
+            if (target == L"default") Wh_DeleteValue(L"presets.auto.manual");
+            pending.clear();
+            return;
+        }
+    }
+    if (target == active) {
+        pending.clear();
+        return;
+    }
+    ULONGLONG now = GetTickCount64();
+    if (target != pending) {
+        pending = target;
+        pendingSince = now;
+        return;
+    }
+    if (now - pendingSince < 10000) return;
+    pending.clear();
+
+    std::optional<std::map<std::wstring, std::wstring>> values;
+    if (target == L"default") {
+        if (!rules[0].empty()) {
+            values = PresetRuleValues(rules[0]);
+        } else if (std::wstring kept = ReadStoredLong(L"presets.auto.manual");
+                   !kept.empty()) {
+            values = UnpackPresetValues(kept);
+        }
+    } else {
+        values = PresetRuleValues(rules[target == L"battery" ? 1 : 2]);
+        // Leaving your own set-up: kept, to come back to.
+        if (active == L"default" && rules[0].empty()) {
+            std::wstring packed = PackPresetValues(CurrentPresetValues());
+            if (packed.size() < 30000) {
+                Wh_SetStringValue(L"presets.auto.manual", packed.c_str());
+            }
+        }
+    }
+    Wh_SetStringValue(L"presets.auto.active", target.c_str());
+    if (!values) {
+        ModLog(L"Auto-switch: %s, but its preset was not found; nothing changed",
+               target.c_str());
+        return;
+    }
+    ModLog(L"Auto-switch: %s (%s%s%s)", target.c_str(),
+           onBattery ? L"on battery" : L"on mains",
+           high ? L", busy" : L"", fullscreen ? L", fullscreen" : L"");
+    // Applied once this update is over, not in the middle of it.
+    auto queue = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    if (!queue || g_unloading) return;
+    auto guard = std::make_shared<PendingGuard>();
+    queue.TryEnqueue(winrt::Windows::System::DispatcherQueuePriority::Low,
+                     [values = *values, guard] {
+                         if (g_unloading) return;
+                         try {
+                             ApplyPresetCore(values);
+                             g_presetAutoApplied = true;
+                             ReloadAllSettings();
+                         } catch (...) {
+                         }
+                     });
+}
+
 // Asks for the Presets panel to come back after the page is redrawn, at the
 // same scroll position.
 void UiKeepPresetsOpen() {
@@ -40771,9 +41910,12 @@ ScrollViewer BuildPresetsContent() {
     StackPanel panel;
     panel.Width(400);
     panel.Spacing(4);
+    // Room on the right for the scroll bar, which is drawn over the content.
+    panel.Padding(Thickness{0, 0, 14, 0});
     auto heading = [&](PCWSTR text, double top) {
         auto block = UiText(text, 12, 600, 0.6);
-        block.Margin(Thickness{2, top, 0, 2});
+        // 4 px plus the panel's 4 px spacing: 8 px above what follows.
+        block.Margin(Thickness{2, top, 0, 4});
         panel.Children().Append(block);
     };
     // A wide button with a name and a line under it.
@@ -40805,8 +41947,7 @@ ScrollViewer BuildPresetsContent() {
     for (const auto& preset : kPresets) {
         const ItemsPreset* chosen = &preset;
         panel.Children().Append(choice(preset.name, PresetBlurb(preset.key), [chosen] {
-            ApplyPresetValues(chosen->name, {{L"items", chosen->items},
-                                             {L"layout", chosen->layout}});
+            ApplyPresetValues(chosen->name, BuiltInPresetValues(*chosen));
         }, true));
     }
 
@@ -40842,9 +41983,13 @@ ScrollViewer BuildPresetsContent() {
             box.MaxLength(60);
             box.VerticalAlignment(VerticalAlignment::Center);
             auto finished = std::make_shared<bool>(false);
-            auto finish = [box, path, name, finished](bool keep) {
+            // Held weakly: the box's own handlers hold finish.
+            auto weakBox = winrt::make_weak(box);
+            auto finish = [weakBox, path, name, finished](bool keep) {
                 if (*finished) return;
                 *finished = true;
+                auto box = weakBox.get();
+                if (!box) return;
                 std::wstring title = box.Text().c_str();
                 std::erase_if(title, [](wchar_t ch) {
                     return ch == L'\n' || ch == L'\r';
@@ -40873,9 +42018,15 @@ ScrollViewer BuildPresetsContent() {
             box.LostFocus([finish](IInspectable const&, RoutedEventArgs const&) {
                 finish(true);
             });
-            box.Loaded([box](IInspectable const&, RoutedEventArgs const&) {
-                box.Focus(FocusState::Programmatic);
-                box.SelectAll();
+            // The box from the event, not captured: a handler holding its
+            // own box would keep it (and the old panel) alive for good.
+            box.Loaded([](IInspectable const& sender, RoutedEventArgs const&) {
+                try {
+                    auto self = sender.as<TextBox>();
+                    self.Focus(FocusState::Programmatic);
+                    self.SelectAll();
+                } catch (...) {
+                }
             });
             uint32_t index = 0;
             if (row.Children().IndexOf(nameButton, index)) {
@@ -40936,6 +42087,81 @@ ScrollViewer BuildPresetsContent() {
         panel.Children().Append(row);
     }
 
+    // Auto-switch: a Labs feature, shown with Labs on or once a rule is set.
+    bool anyRule = false;
+    for (PCWSTR key : kAutoKeys) anyRule = anyRule || !ReadStored(key, 512).empty();
+    if (g_labs || anyRule) {
+        heading(L"Auto-switch", 12);
+        panel.Children().Append(UiText(
+            L"Switches preset by itself. A change must last 10 seconds, and "
+            L"nothing switches while this window is open.",
+            12, 400, 0.6, true));
+        // Every preset, as a rule's value and its name.
+        std::vector<std::pair<std::wstring, std::wstring>> presets;
+        for (const auto& preset : kPresets) {
+            presets.emplace_back(std::wstring(L"builtin:") + preset.key,
+                                 preset.name);
+        }
+        for (const auto& file : files) {
+            presets.emplace_back(L"file:" + file.name, L"“" + file.name + L"”");
+        }
+        auto rule = [&](PCWSTR key, PCWSTR title, PCWSTR off) {
+            std::vector<std::pair<std::wstring, std::wstring>> choices = {
+                {L"", off}};
+            choices.insert(choices.end(), presets.begin(), presets.end());
+            std::wstring current = ReadStored(key, 512);
+            ComboBox box;
+            box.HorizontalAlignment(HorizontalAlignment::Stretch);
+            int selected = 0;
+            for (size_t i = 0; i < choices.size(); ++i) {
+                box.Items().Append(
+                    winrt::box_value(winrt::hstring(choices[i].second)));
+                if (choices[i].first == current) selected = static_cast<int>(i);
+            }
+            if (selected == 0 && !current.empty()) {
+                // A preset that is gone (deleted or renamed): said so.
+                box.Items().Append(winrt::box_value(winrt::hstring(
+                    L"Missing: " + current.substr(current.find(L':') + 1))));
+                choices.emplace_back(current, L"");
+                selected = static_cast<int>(choices.size()) - 1;
+            }
+            box.SelectedIndex(selected);
+            std::wstring storeKey = key;
+            box.SelectionChanged([choices, storeKey](IInspectable const& sender,
+                                                     SelectionChangedEventArgs const&) {
+                try {
+                    int index = sender.as<ComboBox>().SelectedIndex();
+                    if (index < 0 || index >= static_cast<int>(choices.size())) {
+                        return;
+                    }
+                    Wh_SetStringValue(storeKey.c_str(), choices[index].first.c_str());
+                    // No rule left: the auto-switch forgets its state.
+                    bool left = false;
+                    for (PCWSTR k : kAutoKeys) left = left || !ReadStored(k, 512).empty();
+                    if (!left) {
+                        Wh_DeleteValue(L"presets.auto.active");
+                        Wh_DeleteValue(L"presets.auto.manual");
+                    }
+                    DiagLog(kDiagSettings, L"auto-switch: %s = %s",
+                            storeKey.c_str(), choices[index].first.c_str());
+                } catch (...) {
+                }
+            });
+            Grid row;
+            row.ColumnSpacing(8);
+            AddColumns(row, {GridPx(150), GridStar()});
+            auto label = UiText(title, 13, 400, 0.9, true);
+            label.VerticalAlignment(VerticalAlignment::Center);
+            row.Children().Append(label);
+            Grid::SetColumn(box, 1);
+            row.Children().Append(box);
+            panel.Children().Append(row);
+        };
+        rule(kAutoKeys[0], L"Default preset", L"None (Manual)");
+        rule(kAutoKeys[1], L"On battery", L"Off");
+        rule(kAutoKeys[2], L"High load or fullscreen", L"Off");
+    }
+
     heading(L"Save the current readings", 12);
     panel.Children().Append(UiText(
         L"A name that already exists replaces that preset.", 12, 400, 0.6, true));
@@ -40968,6 +42194,12 @@ ScrollViewer BuildPresetsContent() {
     TextBox folderBox;
     folderBox.PlaceholderText(L"Empty: Documents\\Taskbar System Monitor\\Presets");
     folderBox.Text(winrt::hstring(GetStringSetting(L"presets.folder")));
+    // One line, clear of the scroll bar; the whole path in its tooltip.
+    folderBox.TextWrapping(TextWrapping::NoWrap);
+    folderBox.HorizontalAlignment(HorizontalAlignment::Stretch);
+    folderBox.Padding(Thickness{10, 5, 12, 6});
+    ToolTipService::SetToolTip(
+        folderBox, winrt::box_value(winrt::hstring(PresetsFolder())));
     auto applyFolder = [](IInspectable const& sender) {
         try {
             std::wstring value = sender.as<TextBox>().Text().c_str();
@@ -41095,8 +42327,14 @@ Flyout BuildPresetsFlyout() {
 }
 
 void BuildReadingsPage() {
-    g_uiDockWave = ReadStored(L"ui.dockSwell") == L"on";
+    // A Labs feature: the swell only with Labs on (its choice is kept).
+    g_uiDockWave = g_labs && ReadStored(L"ui.dockSwell") == L"on";
     g_uiSwellLog = DiagOn(kDiagReadings);
+    try {
+        UiMigratePrimaryZone();
+    } catch (...) {
+        ModLog(L"Moving readings into the Primary zone failed");
+    }
     auto settings = CurrentSettings();
     if (g_ui.pickedEntry >= settings->entryCount) g_ui.pickedEntry = -1;
     bool text = ReadStored(L"ui.readingsView") == L"text";
@@ -41187,14 +42425,24 @@ void BuildReadingsPage() {
         if (g_ui.presets && g_ui.presetsOpen && g_ui.presetsAnchor) {
             if (auto kept = g_ui.presetsAnchor.try_as<Button>()) {
                 try {
-                    if (auto parent = Media::VisualTreeHelper::GetParent(kept)
-                                          .try_as<Controls::Panel>()) {
+                    // Taken out of the old top bar first. The old page is
+                    // already cleared off the window, where the visual
+                    // tree no longer knows the bar, so its logical parent
+                    // (Parent) is asked first and the visual one second.
+                    for (auto parent :
+                         {kept.Parent().try_as<Controls::Panel>(),
+                          Media::VisualTreeHelper::GetParent(kept)
+                              .try_as<Controls::Panel>()}) {
+                        if (!parent) continue;
                         uint32_t at = 0;
                         if (parent.Children().IndexOf(kept, at)) {
                             parent.Children().RemoveAt(at);
                         }
                     }
-                    presets = kept;
+                    // Still in a panel (it could not be taken out): a new
+                    // button instead, or the page fails to draw with
+                    // "already the child of another element" (800F1000).
+                    if (!kept.Parent()) presets = kept;
                 } catch (...) {
                 }
             }
@@ -41274,6 +42522,18 @@ void BuildReadingsPage() {
                 undo.Padding(Thickness{4, 0, 4, 0});
                 undo.Click([](IInspectable const&, RoutedEventArgs const&) {
                     UndoPreset();
+                });
+                line.Children().Append(undo);
+            } else if (g_ui.noticeHistoryUndo && g_history.position > 0) {
+                HyperlinkButton undo;
+                undo.Content(winrt::box_value(winrt::hstring(L"Undo")));
+                undo.Padding(Thickness{4, 0, 4, 0});
+                undo.Click([](IInspectable const&, RoutedEventArgs const&) {
+                    try {
+                        g_ui.noticeHistoryUndo = false;
+                        UiUndo();
+                    } catch (...) {
+                    }
                 });
                 line.Children().Append(undo);
             }
@@ -41948,7 +43208,7 @@ Border UiWeatherNowCard() {
 // About ▸ the log: what the mod noted while running (placement, sensors,
 // the web), newest last, with a few facts about this PC on top when copied.
 std::wstring UiDiagnostics() {
-    std::wstring text = L"Taskbar System Monitor 1.0.0 (Windhawk mod)\r\n";
+    std::wstring text = L"Taskbar System Monitor 1.1.0 (Windhawk mod)\r\n";
     OSVERSIONINFOEXW version{sizeof(version)};
     using RtlGetVersionProc = LONG(WINAPI*)(OSVERSIONINFOEXW*);
     if (auto rtl = reinterpret_cast<RtlGetVersionProc>(GetProcAddress(
@@ -41973,33 +43233,126 @@ std::wstring UiDiagnostics() {
     return text + ModLogText();
 }
 
+// A switch as the About page draws them: sized like every other switch, so
+// its right edge lines up with the buttons of the cards below.
+ToggleSwitch UiAboutSwitch(bool on) {
+    ToggleSwitch toggle;
+    toggle.IsOn(on);
+    toggle.MinWidth(0);
+    toggle.HorizontalAlignment(HorizontalAlignment::Right);
+    toggle.OnContent(winrt::box_value(L"On"));
+    toggle.OffContent(winrt::box_value(L"Off"));
+    return toggle;
+}
+
+// The log under About stays opened or closed while the window is open.
+bool g_uiLogOpen = false;
+
+// About: who made the mod and which version, then Labs, this window,
+// keeping and resetting, troubleshooting, and the log folded at the end.
 void UiBuildAboutPage() {
     g_ui.content.Children().Append(UiCard(
-        L"Taskbar System Monitor 1.0.0",
+        L"Taskbar System Monitor 1.1.0",
         L"A Windhawk mod by Wcm1D, under GPL-3.0. System readings, network "
         L"use, weather and the exchange rate on the Windows 11 taskbar.",
         nullptr));
+
+    UiHeading(L"Labs");
+    {
+        auto master = UiAboutSwitch(g_labs);
+        master.Toggled([](IInspectable const& sender, RoutedEventArgs const&) {
+            try {
+                bool value = sender.as<ToggleSwitch>().IsOn();
+                if (value == g_labs) return;
+                Wh_SetStringValue(L"ui.labs", value ? L"on" : L"off");
+                g_labs = value;
+                g_uiDockWave = value && ReadStored(L"ui.dockSwell") == L"on";
+                DiagLog(kDiagSettings, L"labs %s", value ? L"on" : L"off");
+                ReloadAllSettings();
+                UiRebuildSoon();  // Its switches show or go.
+            } catch (...) {
+            }
+        });
+        g_ui.content.Children().Append(UiCard(
+            L"Enable experimental & lab features",
+            L"Off (default). Features that work but are not polished yet. "
+            L"On shows them: the swell under the pointer and the panel "
+            L"switch below; Before system icons, After system icons and "
+            L"After clock on the Readings page; Shift the Start button "
+            L"itself, Center zone with centered apps and Other monitors "
+            L"show under Position; and a reading's own icon size, value "
+            L"size, value width and alignment in its options. Off hides "
+            L"them and the taskbar ignores what they were set to, but "
+            L"nothing is deleted: turning Labs on again brings every choice "
+            L"back. Readings already in a hidden zone stay on the taskbar.",
+            master));
+    }
+    if (g_labs) {
+        {
+            auto wave = UiAboutSwitch(ReadStored(L"ui.dockSwell") == L"on");
+            wave.Toggled([](IInspectable const& sender, RoutedEventArgs const&) {
+                try {
+                    bool on = sender.as<ToggleSwitch>().IsOn();
+                    Wh_SetStringValue(L"ui.dockSwell", on ? L"on" : L"off");
+                    g_uiDockWave = on && g_labs;
+                } catch (...) {
+                }
+            });
+            Border card = UiCard(
+                L"Swell under the pointer",
+                L"On the Readings page, the readings under the pointer swell "
+                L"in a smooth wave like a dock while the pointer moves over a "
+                L"zone. Off (the default, closer to Windows 11): readings keep "
+                L"their size under the pointer, and only the picked one "
+                L"(clicked or reached with the arrow keys) is drawn a little "
+                L"larger. Dragging and the small bounce of a click work "
+                L"either way.",
+                wave);
+            card.Margin(Thickness{28, 0, 0, 4});
+            g_ui.content.Children().Append(card);
+        }
+        {
+            auto fixed = UiAboutSwitch(g_panelFixedTop);
+            fixed.Toggled([](IInspectable const& sender, RoutedEventArgs const&) {
+                try {
+                    bool value = sender.as<ToggleSwitch>().IsOn();
+                    Wh_SetStringValue(L"ui.exp.fixedTop", value ? L"on" : L"off");
+                    g_panelFixedTop = value;
+                } catch (...) {
+                }
+            });
+            Border card = UiCard(
+                L"Panel: fixed top while resizing",
+                L"On (default): with the taskbar at the bottom, the details "
+                L"panel's window keeps its top edge while it is open and the "
+                L"card resizes inside it, so its contents are not pulled up "
+                L"or cut for a frame when it switches. Off: the window moves "
+                L"with the card, as before. For comparing the two if "
+                L"switching panels looks less smooth with it on; the Details "
+                L"panel log says which was used for each glide.",
+                fixed);
+            card.Margin(Thickness{28, 0, 0, 4});
+            g_ui.content.Children().Append(card);
+        }
+    }
+
     UiHeading(L"This window");
     {
-        ToggleSwitch mica;
-        mica.IsOn(ReadStored(L"ui.mica") != L"off");
-        // Sized like every other switch, so its right edge lines up with
-        // the buttons of the cards below.
-        mica.MinWidth(0);
-        mica.HorizontalAlignment(HorizontalAlignment::Right);
-        mica.OnContent(winrt::box_value(L"On"));
-        mica.OffContent(winrt::box_value(L"Off"));
+        auto mica = UiAboutSwitch(ReadStored(L"ui.mica") != L"off");
         // What the switch did, in words: the material is subtle, so the
         // window alone does not always show it.
         auto status = UiText(UiMicaStatus(mica.IsOn()), 12, 400, 1.0, true);
         status.Foreground(UiBrush(255, 0x4C, 0xA2, 0xFF));
-        mica.Toggled([status](IInspectable const& sender,
-                              RoutedEventArgs const&) {
+        // The status line sits in the same card as the switch: held weakly,
+        // so the switch's handler does not keep the old card alive.
+        auto weakStatus = winrt::make_weak(status);
+        mica.Toggled([weakStatus](IInspectable const& sender,
+                                  RoutedEventArgs const&) {
             try {
                 bool on = sender.as<ToggleSwitch>().IsOn();
                 Wh_SetStringValue(L"ui.mica", on ? L"on" : L"off");
                 UiApplyMicaNow();
-                status.Text(UiMicaStatus(on));
+                if (auto line = weakStatus.get()) line.Text(UiMicaStatus(on));
             } catch (...) {
             }
         });
@@ -42023,40 +43376,55 @@ void UiBuildAboutPage() {
         }
         g_ui.content.Children().Append(card);
     }
+
+    UiHeading(L"Keeping and resetting");
     {
-        ToggleSwitch wave;
-        wave.IsOn(ReadStored(L"ui.dockSwell") == L"on");
-        wave.MinWidth(0);
-        wave.HorizontalAlignment(HorizontalAlignment::Right);
-        wave.OnContent(winrt::box_value(L"On"));
-        wave.OffContent(winrt::box_value(L"Off"));
-        wave.Toggled([](IInspectable const& sender, RoutedEventArgs const&) {
-            try {
-                bool on = sender.as<ToggleSwitch>().IsOn();
-                Wh_SetStringValue(L"ui.dockSwell", on ? L"on" : L"off");
-                g_uiDockWave = on;
-            } catch (...) {
-            }
+        // Positions exist only after the Move hotkey was used, so the card
+        // says how many there are, and has nothing to reset with none.
+        size_t saved = PlacementProfilesSnapshot().positions.size();
+        auto reset = UiButton(L"Reset", [] {
+            UiFlushHistory();
+            g_history.nextLabel = L"Reset dragged positions";
+            auto profiles = PlacementProfilesSnapshot();
+            profiles.positions.clear();
+            profiles.target.clear();
+            SetPlacementProfiles(profiles);
+            SavePlacementProfiles(profiles);
+            ReloadAllSettings();
+            UiRecordHistory();
+            ShowUiPage(g_ui.page);
         });
+        reset.IsEnabled(saved > 0);
         g_ui.content.Children().Append(UiCard(
-            L"Swell under the pointer",
-            L"On the Readings page, the readings under the pointer swell in "
-            L"a smooth wave like a dock (macOS style) while the pointer "
-            L"moves over a zone. Off (the default, closer to Windows 11): "
-            L"readings keep their size under the pointer, and only the "
-            L"picked one (clicked or reached with the arrow keys) is drawn "
-            L"a little larger. Dragging and the small bounce of a click work "
-            L"either way.",
-            wave));
+            L"Dragged positions",
+            saved == 0
+                ? std::wstring(
+                      L"None saved. A position is saved by dragging the "
+                      L"readings with the Move hotkey (Position), and then "
+                      L"wins over zones.")
+                : std::to_wstring(saved) +
+                      (saved == 1 ? L" position" : L" positions") +
+                      L" saved with the Move hotkey; they win over zones. "
+                      L"Reset forgets them. Undo, under the page list, "
+                      L"brings them back.",
+            reset));
     }
+    g_ui.content.Children().Append(UiCard(
+        L"Back to the defaults",
+        L"Every setting here goes back to its default. Readings, dragged "
+        L"positions and the Labs switch are kept. Undo, under the page "
+        L"list, brings them back.",
+        UiButton(L"Reset", [] {
+            UiFlushHistory();
+            g_history.nextLabel = L"Back to the defaults";
+            ResetUiChanges();
+            ReloadAllSettings();
+            ShowUiPage(g_ui.page);
+        })));
+
     UiHeading(L"Troubleshooting");
     {
-        ToggleSwitch master;
-        master.IsOn(g_diagMaster);
-        master.MinWidth(0);
-        master.HorizontalAlignment(HorizontalAlignment::Right);
-        master.OnContent(winrt::box_value(L"On"));
-        master.OffContent(winrt::box_value(L"Off"));
+        auto master = UiAboutSwitch(g_diagMaster);
         master.Toggled([](IInspectable const& sender, RoutedEventArgs const&) {
             try {
                 bool value = sender.as<ToggleSwitch>().IsOn();
@@ -42117,12 +43485,7 @@ void UiBuildAboutPage() {
              L"shutting down."},
         };
         for (const auto& item : kAreas) {
-            ToggleSwitch on;
-            on.IsOn(g_diagOn[item.area].load());
-            on.MinWidth(0);
-            on.HorizontalAlignment(HorizontalAlignment::Right);
-            on.OnContent(winrt::box_value(L"On"));
-            on.OffContent(winrt::box_value(L"Off"));
+            auto on = UiAboutSwitch(g_diagOn[item.area].load());
             int area = item.area;
             on.Toggled([area](IInspectable const& sender,
                               RoutedEventArgs const&) {
@@ -42142,32 +43505,6 @@ void UiBuildAboutPage() {
             areaCard.Margin(Thickness{28, 0, 0, 4});
             g_ui.content.Children().Append(areaCard);
         }
-        {
-            ToggleSwitch fixed;
-            fixed.IsOn(g_panelFixedTop);
-            fixed.MinWidth(0);
-            fixed.HorizontalAlignment(HorizontalAlignment::Right);
-            fixed.OnContent(winrt::box_value(L"On"));
-            fixed.OffContent(winrt::box_value(L"Off"));
-            fixed.Toggled([](IInspectable const& sender, RoutedEventArgs const&) {
-                try {
-                    bool value = sender.as<ToggleSwitch>().IsOn();
-                    Wh_SetStringValue(L"ui.exp.fixedTop", value ? L"on" : L"off");
-                    g_panelFixedTop = value;
-                } catch (...) {
-                }
-            });
-            g_ui.content.Children().Append(UiCard(
-                L"Panel: fixed top while resizing",
-                L"On (default): with the taskbar at the bottom, the details "
-                L"panel's window keeps its top edge while it is open and the "
-                L"card resizes inside it, so its contents are not pulled up "
-                L"or cut for a frame when it switches. Off: the window moves "
-                L"with the card, as before. For comparing the two if switching "
-                L"panels looks less smooth with it on; the Details panel log "
-                L"says which was used for each glide.",
-                fixed));
-        }
         g_ui.content.Children().Append(UiCard(
             L"About these logs",
             L"For reporting a problem: make it happen once or twice and copy "
@@ -42177,59 +43514,55 @@ void UiBuildAboutPage() {
             L"ones you need, or switch Advanced logs off to stop them all.",
             nullptr));
     }
-    UiHeading(L"Keeping and resetting");
+
+    // The log, folded under its heading until opened: at 380 px it would
+    // otherwise push everything above it out of view.
+    StackPanel logBody;
+    logBody.Visibility(g_uiLogOpen ? Visibility::Visible : Visibility::Collapsed);
     {
-        // Positions exist only after the Move hotkey was used, so the card
-        // says how many there are, and has nothing to reset with none.
-        size_t saved = PlacementProfilesSnapshot().positions.size();
-        auto reset = UiButton(L"Reset", [] {
-            UiFlushHistory();
-            g_history.nextLabel = L"Reset dragged positions";
-            auto profiles = PlacementProfilesSnapshot();
-            profiles.positions.clear();
-            profiles.target.clear();
-            SetPlacementProfiles(profiles);
-            SavePlacementProfiles(profiles);
-            ReloadAllSettings();
-            UiRecordHistory();
-            ShowUiPage(g_ui.page);
+        Button toggle;
+        StackPanel face = HorizontalStack(8);
+        auto chevron = UiGlyph(g_uiLogOpen ? 0xE70E : 0xE70D, 12);  // Up / down.
+        chevron.VerticalAlignment(VerticalAlignment::Center);
+        auto label = UiText(L"Log", 20, 600, 1.0);
+        face.Children().Append(label);
+        face.Children().Append(chevron);
+        toggle.Content(face);
+        toggle.Background(UiBrush(0, 0, 0, 0));
+        toggle.BorderThickness(Thickness{0, 0, 0, 0});
+        toggle.Padding(Thickness{6, 4, 8, 4});
+        toggle.MinHeight(32);
+        toggle.CornerRadius({4, 4, 4, 4});
+        toggle.Margin(Thickness{-6, 20, 0, 6});
+        ToolTipService::SetToolTip(
+            toggle, winrt::box_value(winrt::hstring(L"Show or hide the log")));
+        auto weakBody = winrt::make_weak(logBody);
+        auto weakChevron = winrt::make_weak(chevron);
+        toggle.Click([weakBody, weakChevron](IInspectable const&,
+                                             RoutedEventArgs const&) {
+            try {
+                g_uiLogOpen = !g_uiLogOpen;
+                if (auto body = weakBody.get()) {
+                    body.Visibility(g_uiLogOpen ? Visibility::Visible
+                                                : Visibility::Collapsed);
+                }
+                if (auto glyph = weakChevron.get()) {
+                    glyph.Glyph(std::wstring(1, g_uiLogOpen ? wchar_t(0xE70E)
+                                                           : wchar_t(0xE70D)));
+                }
+            } catch (...) {
+            }
         });
-        reset.IsEnabled(saved > 0);
-        g_ui.content.Children().Append(UiCard(
-            L"Dragged positions",
-            saved == 0
-                ? std::wstring(
-                      L"None saved. A position is saved by dragging the "
-                      L"readings with the Move hotkey (Position), and then "
-                      L"wins over zones.")
-                : std::to_wstring(saved) +
-                      (saved == 1 ? L" position" : L" positions") +
-                      L" saved with the Move hotkey; they win over zones. "
-                      L"Reset forgets them. Undo, under the page list, "
-                      L"brings them back.",
-            reset));
+        g_ui.content.Children().Append(toggle);
     }
-    g_ui.content.Children().Append(UiCard(
-        L"Back to the defaults",
-        L"Every setting here goes back to its default. Readings "
-        L"and dragged positions are kept. Undo, under the page "
-        L"list, brings them back.",
-        UiButton(L"Reset", [] {
-            UiFlushHistory();
-            g_history.nextLabel = L"Back to the defaults";
-            ResetUiChanges();
-            ReloadAllSettings();
-            ShowUiPage(g_ui.page);
-        })));
-    UiHeading(L"Log");
     auto note = UiText(
         L"What the mod noted while running: where widgets were placed and "
-        L"why, sensors found, web requests. The last 400 lines since "
+        L"why, sensors found, web requests. The last 1000 lines since "
         L"Explorer started. Copy it with the PC's details when reporting a "
         L"problem.",
         12, 400, 0.7, true);
     note.Margin(Thickness{2, 0, 0, 8});
-    g_ui.content.Children().Append(note);
+    logBody.Children().Append(note);
     TextBox log;
     log.IsReadOnly(true);
     log.AcceptsReturn(true);
@@ -42245,24 +43578,33 @@ void UiBuildAboutPage() {
     buttons.Margin(Thickness{0, 8, 0, 0});
     auto status = UiText(L"", 12, 400, 0.7);
     status.VerticalAlignment(VerticalAlignment::Center);
-    buttons.Children().Append(UiButton(L"Copy with PC details", [status] {
-        status.Text(CopyTextToClipboard(UiDiagnostics()) ? L"Copied."
-                                                          : L"Could not copy.");
+    // The buttons sit beside the log and the status line: held weakly, so
+    // a button's handler does not keep the old page alive after a redraw.
+    auto weakLog = winrt::make_weak(log);
+    auto weakStatus = winrt::make_weak(status);
+    buttons.Children().Append(UiButton(L"Copy with PC details", [weakStatus] {
+        bool copied = CopyTextToClipboard(UiDiagnostics());
+        if (auto line = weakStatus.get()) {
+            line.Text(copied ? L"Copied." : L"Could not copy.");
+        }
     }, true));
-    buttons.Children().Append(UiButton(L"Refresh", [log] {
+    buttons.Children().Append(UiButton(L"Refresh", [weakLog] {
         std::wstring now = ModLogText();
-        log.Text(now.empty() ? L"Nothing logged yet." : now);
+        if (auto box = weakLog.get()) {
+            box.Text(now.empty() ? L"Nothing logged yet." : now);
+        }
     }));
-    buttons.Children().Append(UiButton(L"Clear", [log] {
+    buttons.Children().Append(UiButton(L"Clear", [weakLog] {
         {
             std::lock_guard lock(g_logMutex);
             g_logLines.clear();
         }
-        log.Text(L"Nothing logged yet.");
+        if (auto box = weakLog.get()) box.Text(L"Nothing logged yet.");
     }));
     buttons.Children().Append(status);
-    g_ui.content.Children().Append(log);
-    g_ui.content.Children().Append(buttons);
+    logBody.Children().Append(log);
+    logBody.Children().Append(buttons);
+    g_ui.content.Children().Append(logBody);
     // Scrolled to the newest line.
     log.Loaded([](IInspectable const& sender, RoutedEventArgs const&) {
         try {
@@ -42304,6 +43646,8 @@ void UiResetContentArea() {
     g_ui.dropGhostText = nullptr;
     g_ui.drag = UiDrag{};
     g_ui.panelPress = {};
+    g_ui.stickyKind.reset();
+    if (g_ui.sticky) g_ui.sticky.Visibility(Visibility::Collapsed);
     g_ui.content.Children().Clear();
     g_ui.batteryPreview = nullptr;
     g_ui.batteryEditor.reset();
@@ -42347,6 +43691,7 @@ void ShowUiGroupList(int group) {
     g_ui.reopenOptions = false;
     g_ui.reopenPresets = false;
     g_ui.notice.clear();
+    g_ui.noticeHistoryUndo = false;
     g_ui.undo.reset();
     UiResetContentArea();
     auto title = UiText(top.name, 28, 600, 1.0);
@@ -42407,6 +43752,8 @@ void ShowUiGroupList(int group) {
 // One setting as a card on the page: its title and description, the
 // control with a reset button before it, and the few live previews that
 // belong right under a setting. Pages and the search results both use it.
+Border UiSimulationCard();
+
 void UiAppendSetting(const UiSetting& s) {
     bool enabled = true;
     std::wstring needs;
@@ -42449,6 +43796,11 @@ void UiAppendSetting(const UiSetting& s) {
     settingCard.Tag(winrt::box_value(
         static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&s))));
     g_ui.content.Children().Append(settingCard);
+    // The preview simulation, right under the setting it shows off.
+    // (Look only: Privacy mode's own switch is the quickest way to see it.)
+    if (wcscmp(s.key, L"colors.alertStyle") == 0) {
+        g_ui.content.Children().Append(UiSimulationCard());
+    }
     if (wcscmp(s.key, L"weather.every") == 0) {
         g_ui.content.Children().Append(UiWeatherNowCard());
     }
@@ -42509,6 +43861,7 @@ void UiBuildSearchResults() {
         for (const auto& section : page.sections) {
             bool headed = false;
             for (const auto& s : section.settings) {
+                if (UiSettingHidden(s)) continue;
                 std::wstring text = std::wstring(page.name) + L' ' +
                                     section.title + L' ' + s.title + L' ' +
                                     s.description + L' ' + s.unit;
@@ -42569,7 +43922,13 @@ struct UiFocusMark {
     int index = -1;
     winrt::hstring kind;
     FocusState state = FocusState::Programmatic;
+    // The setting card it was in (its Tag), found again by that rather
+    // than by place: a text box that saves on leaving (Tab) or on Enter
+    // makes a reset button come or go, which shifts the places. 0: none.
+    uint64_t settingTag = 0;
+    int caret = -1;  // A text box's caret, put back with the focus.
 };
+Control UiCardPrimary(const Border& card);
 std::vector<Control> UiPageControls() {
     std::vector<Control> controls;
     if (g_ui.headHost && g_ui.headHost.Visibility() == Visibility::Visible &&
@@ -42604,6 +43963,16 @@ UiFocusMark UiMarkFocus() {
                     }
                 }
             }
+            if (!mark.settingTag) {
+                if (auto border = at.try_as<Border>()) {
+                    if (auto tag = border.Tag()) {
+                        if (auto value = tag.try_as<
+                                winrt::Windows::Foundation::IReference<uint64_t>>()) {
+                            mark.settingTag = value.Value();
+                        }
+                    }
+                }
+            }
             if ((g_ui.scroller && at == g_ui.scroller) ||
                 (g_ui.headHost && at == g_ui.headHost)) {
                 mark.inPage = true;
@@ -42614,10 +43983,32 @@ UiFocusMark UiMarkFocus() {
         if (found) {
             mark.kind = winrt::get_class_name(found);
             mark.state = found.FocusState();
+            if (auto box = found.try_as<TextBox>()) {
+                mark.caret = box.SelectionStart();
+            }
         }
     } catch (...) {
     }
     return mark;
+}
+
+// The control of the same kind in the redrawn card of the same setting.
+Control UiFocusTargetBySetting(const UiFocusMark& mark) {
+    if (!mark.settingTag || !g_ui.content) return nullptr;
+    for (auto child : g_ui.content.Children()) {
+        auto card = child.try_as<Border>();
+        if (!card || !card.Tag()) continue;
+        auto value =
+            card.Tag().try_as<winrt::Windows::Foundation::IReference<uint64_t>>();
+        if (!value || value.Value() != mark.settingTag) continue;
+        std::vector<Control> controls;
+        UiCardControls(card, controls, 0);
+        for (const auto& control : controls) {
+            if (winrt::get_class_name(control) == mark.kind) return control;
+        }
+        return UiCardPrimary(card);
+    }
+    return nullptr;
 }
 void UiRestoreFocus(const UiFocusMark& mark) {
     if (!mark.inPage) return;
@@ -42629,10 +44020,12 @@ void UiRestoreFocus(const UiFocusMark& mark) {
                 if (g_settingsMenuOpen) return;  // A panel has the keyboard.
                 auto controls = UiPageControls();
                 int count = static_cast<int>(controls.size());
-                Control target{nullptr};
-                // The same place, or the nearest of the same kind (a reset
-                // button that came or went shifts the places by one).
+                // The same setting's card first; else the same place, or
+                // the nearest of the same kind (a reset button that came or
+                // went shifts the places by one).
+                Control target = UiFocusTargetBySetting(mark);
                 for (int away : {0, 1, -1, 2, -2}) {
+                    if (target) break;
                     int i = mark.index + away;
                     if (mark.index < 0 || i < 0 || i >= count) continue;
                     if (winrt::get_class_name(controls[i]) == mark.kind) {
@@ -42644,6 +44037,11 @@ void UiRestoreFocus(const UiFocusMark& mark) {
                     target.Focus(mark.state == FocusState::Keyboard
                                      ? FocusState::Keyboard
                                      : FocusState::Pointer);
+                    if (auto box = target.try_as<TextBox>();
+                        box && mark.caret >= 0) {
+                        int length = static_cast<int>(box.Text().size());
+                        box.Select(std::min(mark.caret, length), 0);
+                    }
                 } else if (g_ui.scroller) {
                     g_ui.scroller.Focus(FocusState::Programmatic);
                 }
@@ -42722,7 +44120,13 @@ void ShowUiPage(int page) {
         g_ui.reopenOptions = false;
         g_ui.reopenPresets = false;
         g_ui.notice.clear();
+        g_ui.noticeHistoryUndo = false;
         g_ui.undo.reset();
+        // The preview simulation belongs to the page it was chosen on.
+        if (g_ui.simulate != 0) {
+            g_ui.simulate = 0;
+            UiRefreshPreview();
+        }
     }
     g_ui.page = page;
     UiResetContentArea();
@@ -42755,6 +44159,8 @@ void ShowUiPage(int page) {
     g_ui.changedKeys.clear();
     for (const auto& section : pages[page].sections) {
         for (const auto& s : section.settings) {
+            // A hidden setting keeps its value: not reset with the page.
+            if (UiSettingHidden(s)) continue;
             if (UiSettingChanged(s)) {
                 changed.push_back(&s);
                 g_ui.changedKeys.insert(s.key);
@@ -42797,8 +44203,19 @@ void ShowUiPage(int page) {
             BuildReadingsPage();
         } else {
             for (const auto& section : pages[page].sections) {
+                // A section whose settings are all hidden goes with them.
+                if (std::all_of(section.settings.begin(),
+                                section.settings.end(),
+                                [](const UiSetting& s) {
+                                    return UiSettingHidden(s);
+                                }) &&
+                    !section.settings.empty()) {
+                    continue;
+                }
                 UiHeading(section.title);
-                for (const auto& s : section.settings) UiAppendSetting(s);
+                for (const auto& s : section.settings) {
+                    if (!UiSettingHidden(s)) UiAppendSetting(s);
+                }
                 if (wcscmp(pages[page].name, L"Privacy") == 0 &&
                     wcscmp(section.title,
                            L"Auto-detect streaming & meeting apps") == 0) {
@@ -43379,6 +44796,67 @@ bool UiTextHasFocus() {
     }
 }
 
+// Readings page, a reading picked: Alt+Left / Alt+Right move it one place
+// (inside its group first, past its neighbor's group otherwise), Alt+Down
+// stacks it with the reading after it (one line each), Alt+Up takes it out
+// of its group again. Each is one Undo step, like a drag.
+void UiNudgePicked(WPARAM key) {
+    UiEditPicked([key](ModSettings&, EntryPlace& p, int e) {
+        auto& cells = *p.cells;
+        auto& cell = cells[p.cell];
+        auto& members = cell.members;
+        using CM = ModSettings::CellMode;
+        if (key == VK_LEFT || key == VK_RIGHT) {
+            int step = key == VK_LEFT ? -1 : 1;
+            int other = static_cast<int>(p.member) + step;
+            if (other >= 0 && other < static_cast<int>(members.size())) {
+                std::swap(members[p.member], members[other]);
+                return;
+            }
+            size_t neighbor = p.cell + step;
+            if (step < 0 && p.cell == 0) return;
+            if (neighbor >= cells.size()) return;
+            if (members.size() == 1) {
+                std::swap(cells[p.cell], cells[neighbor]);
+                return;
+            }
+            // Leaving its group: a place of its own beside it.
+            members.erase(members.begin() + p.member);
+            ModSettings::ItemCell alone;
+            alone.members = {e};
+            cells.insert(cells.begin() + (step < 0 ? p.cell : p.cell + 1),
+                         alone);
+            return;
+        }
+        if (key == VK_DOWN) {
+            if (members.size() > 1) {
+                cell.mode = CM::Stack;  // Its group, one line each.
+                return;
+            }
+            size_t next = p.cell + 1;
+            if (next >= cells.size() || cells[next].separator ||
+                cells[next].members.empty()) {
+                return;
+            }
+            auto& below = cells[next].members;
+            below.insert(below.begin(), e);
+            cells[next].mode = CM::Stack;
+            members.clear();  // Tidied away after the edit.
+            return;
+        }
+        if (key == VK_UP) {
+            if (members.size() < 2) return;
+            members.erase(members.begin() + p.member);
+            if (members.size() == 1 && cell.mode == CM::Stack) {
+                cell.mode = CM::Default;
+            }
+            ModSettings::ItemCell alone;
+            alone.members = {e};
+            cells.insert(cells.begin() + p.cell + 1, alone);
+        }
+    });
+}
+
 // Keys and buttons of the whole window, seen before any control or open
 // panel gets them, so a panel that holds the keyboard (a reading's
 // options, Presets, the + list) does not keep them from working: Ctrl+Z,
@@ -43391,6 +44869,19 @@ bool UiPreTranslate(const MSG& msg) {
             bool ctrl = GetKeyState(VK_CONTROL) & 0x8000;
             bool alt = GetKeyState(VK_MENU) & 0x8000;
             bool shift = GetKeyState(VK_SHIFT) & 0x8000;
+            // A picked reading on the Readings page (Visual view): Alt and
+            // the arrows move it (UiNudgePicked) instead of Back / Forward.
+            if (alt && !ctrl && !shift &&
+                (msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT ||
+                 msg.wParam == VK_UP || msg.wParam == VK_DOWN) &&
+                g_ui.page == 0 && g_ui.search.empty() &&
+                g_ui.pickedEntry >= 0 && !g_ui.pickedGroup &&
+                !g_ui.pickedDivider && !g_ui.drag.active &&
+                !g_settingsMenuOpen && !UiTextHasFocus() &&
+                ReadStored(L"ui.readingsView") != L"text") {
+                UiNudgePicked(msg.wParam);
+                return true;
+            }
             if (alt && !ctrl && !shift &&
                 (msg.wParam == VK_LEFT || msg.wParam == VK_RIGHT)) {
                 UiNavGo(msg.wParam == VK_LEFT ? -1 : 1);
@@ -43489,7 +44980,8 @@ void UiRefreshPreview() {
         static constexpr struct {
             ZK kind;
             PCWSTR name;
-        } kOrder[] = {{ZK::Left, L"Left edge"},
+        } kOrder[] = {{ZK::Primary, L"Primary zone"},
+                      {ZK::Left, L"Left edge"},
                       {ZK::Center, L"Center"},
                       {ZK::AppsLeft, L"Before apps"},
                       {ZK::Apps, L"After apps"},
@@ -43614,6 +45106,25 @@ void UiRefreshPreview() {
         }
         bool fresh = MetricsSnapshotIsFresh(model->metrics, *settings,
                                             SampleTime::clock::now());
+        // Preview simulation (the box under the bar): the values are drawn
+        // as if at a level, or with Privacy mode on, here only.
+        ItemAlerts alerts = fresh ? model->alerts : ItemAlerts{};
+        std::optional<ModSettings> simulated;
+        if (g_ui.simulate == 1 || g_ui.simulate == 2) {
+            simulated = *settings;
+            simulated->alertGradual = false;  // The level's color itself.
+            AlertLevel level = g_ui.simulate == 1 ? AlertLevel::Warning
+                                                  : AlertLevel::Critical;
+            for (int item = 0; item < kItemCount; ++item) {
+                int kind = GpuKindOf(item);
+                if (item == kItemCpu || item == kItemCpuTemp ||
+                    item == kItemRam || kind == kItemGpu ||
+                    kind == kItemGpuTemp || kind == kItemVram) {
+                    alerts[item] = level;
+                }
+            }
+        }
+        const ModSettings& look = simulated ? *simulated : *settings;
         for (const auto& zone : zones) {
             auto& slot = p.zones[static_cast<int>(zone.kind)];
             bool restyle = !slot.view || slot.revision != settings->revision ||
@@ -43641,14 +45152,59 @@ void UiRefreshPreview() {
             }
             RenderWidgetValues(*slot.view,
                                fresh ? model->entries : EntrySnapshots{},
-                               *settings, zone.layout,
-                               fresh ? model->alerts : ItemAlerts{},
-                               p.alertBrushes, p.textBrush);
+                               look, zone.layout, alerts, p.alertBrushes,
+                               p.textBrush);
         }
     } catch (...) {
     }
 }
 
+// Preview simulation on the Look page, under Level colors: the live
+// preview above drawn as if CPU, GPU and memory were at their warning or
+// critical level, states that cannot be brought about on demand. It goes
+// back to live readings when another page is shown or the window closes.
+Border UiSimulationCard() {
+    // Choices, and the g_ui.simulate value each one stands for.
+    std::vector<std::pair<PCWSTR, int>> choices = {{L"Live readings", 0},
+                                                   {L"Warning colors", 1},
+                                                   {L"Critical colors", 2}};
+    ComboBox box;
+    box.MinWidth(220);
+    int selected = 0;
+    for (size_t i = 0; i < choices.size(); ++i) {
+        box.Items().Append(winrt::box_value(winrt::hstring(choices[i].first)));
+        if (choices[i].second == g_ui.simulate) selected = static_cast<int>(i);
+    }
+    box.SelectedIndex(selected);
+    box.DropDownOpened([](IInspectable const&, IInspectable const&) {
+        g_settingsMenuOpen = true;
+    });
+    box.DropDownClosed([](IInspectable const&, IInspectable const&) {
+        g_settingsMenuOpen = false;
+    });
+    box.SelectionChanged([choices](IInspectable const& sender,
+                                   SelectionChangedEventArgs const&) {
+        try {
+            int index = sender.as<ComboBox>().SelectedIndex();
+            if (index < 0 || index >= static_cast<int>(choices.size())) return;
+            int value = choices[index].second;
+            if (value == g_ui.simulate) return;
+            g_ui.simulate = value;
+            DiagLog(kDiagSettings, L"preview simulation %d", value);
+            UiRefreshPreview();
+        } catch (...) {
+        }
+    });
+    Border card = UiCard(
+        L"Try it in the preview",
+        L"Shows the live preview above as if CPU, GPU and memory were at "
+        L"their warning or critical level, in the colors set here. Only the "
+        L"preview changes; it goes back to live readings when you leave "
+        L"this page.",
+        box);
+    card.Margin(Thickness{28, 0, 0, 4});  // Under the setting it belongs to.
+    return card;
+}
 // The strip itself: a taskbar-colored bar that stays above the scrolling
 // page, on every page, with the no-room notice under it when there is one.
 Border UiBuildPreviewStrip() {
@@ -43702,6 +45258,46 @@ Border UiBuildPreviewStrip() {
     notice.Visibility(Visibility::Collapsed);
     g_ui.fitNotice = notice;
     p.column.Children().Append(notice);
+    // One-click fixes under it (see UiUpdateFitNotice).
+    {
+        StackPanel actions = HorizontalStack(8);
+        actions.Margin(Thickness{2, 0, 0, 2});
+        actions.Visibility(Visibility::Collapsed);
+        auto compact = UiButton(L"Use compact style", [] {
+            UiFlushHistory();
+            g_history.nextLabel = L"Use compact style";
+            SetUiOverride(L"appearance.rowLabels", L"icon", false);
+            Wh_SetStringValue(L"menu.layout", L"oneRow");
+            ReloadAllSettings();
+            UiRecordHistory();
+            UiRebuildSoon();
+        });
+        ToolTipService::SetToolTip(
+            compact, winrt::box_value(winrt::hstring(
+                         L"Icons for row labels and the One row layout, the "
+                         L"narrowest look. Undo (Ctrl+Z) brings your choices "
+                         L"back.")));
+        g_ui.fitCompact = compact;
+        actions.Children().Append(compact);
+        auto show = UiButton(L"Show zone", [] {
+            auto kind = ZoneFitFirstProblem();
+            if (!kind) return;
+            UiZone zone = *kind;
+            if (zone == UiZone::Default) zone = MainSlot(*CurrentSettings());
+            if (UiSlotShown(*CurrentSettings(), zone)) {
+                g_ui.focusZone = zone;
+                g_ui.focusNone = false;
+            }
+            if (!g_ui.search.empty()) UiClearSearch();
+            ShowUiPage(0);  // Readings, with that zone unfolded.
+        });
+        ToolTipService::SetToolTip(
+            show, winrt::box_value(winrt::hstring(
+                      L"Opens Readings at the zone that is short of room")));
+        actions.Children().Append(show);
+        g_ui.fitActions = actions;
+        p.column.Children().Append(actions);
+    }
     host.Child(p.column);
     p.timer = DispatcherTimer();
     p.timer.Interval(std::chrono::milliseconds(1000));
@@ -43855,7 +45451,55 @@ int g_settingsRebuildPage = -1;  // Settings thread only.
 [[clang::no_destroy]] winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource
     g_settingsSource{nullptr};
 
+// Readings: while a zone's row is scrolled partly out at the top, its name
+// and count stay in view above it (a click scrolls back to its top). Called
+// as the page scrolls; any other page, or search, hides it.
+void UiUpdateStickyZone() {
+    if (!g_ui.sticky || !g_ui.scroller) return;
+    std::optional<ModSettings::ZoneKind> show;
+    std::wstring text;
+    if (g_ui.page == 0 && g_ui.search.empty() && !g_ui.slots.empty()) {
+        for (const auto& slot : g_ui.slots) {
+            if (!slot.area || !slot.summary) continue;
+            double top = slot.area.TransformToVisual(g_ui.scroller)
+                             .TransformPoint({0, 0}).Y;
+            double bottom = top + slot.area.ActualHeight();
+            if (top < -4 && bottom > 44) {
+                show = slot.kind;
+                text = std::wstring(UiSlotName(slot.kind)) + L"  ·  " +
+                       std::wstring(slot.summary.Text());
+                break;
+            }
+        }
+    }
+    if (!show) {
+        g_ui.stickyKind.reset();
+        if (g_ui.sticky.Visibility() != Visibility::Collapsed) {
+            g_ui.sticky.Visibility(Visibility::Collapsed);
+        }
+        return;
+    }
+    g_ui.stickyKind = show;
+    if (g_ui.content && g_ui.content.ActualWidth() > 0) {
+        g_ui.sticky.Width(g_ui.content.ActualWidth());
+    }
+    g_ui.sticky.Background(g_ui.light ? UiBrush(250, 251, 251, 251)
+                                      : UiBrush(250, 43, 43, 43));
+    g_ui.sticky.BorderBrush(g_ui.light ? UiBrush(255, 229, 229, 229)
+                                       : UiBrush(255, 29, 29, 29));
+    SetTextIfChanged(g_ui.stickyText, text);
+    if (g_ui.sticky.Visibility() != Visibility::Visible) {
+        g_ui.sticky.Visibility(Visibility::Visible);
+    }
+}
+
 Grid BuildSettingsRoot() {
+    // An auto-switch changed the set-up while the window was closed: Undo
+    // history starts from it, so the first Undo is not "undo the switch"
+    // mixed with your own change.
+    if (g_presetAutoApplied.exchange(false) && g_history.started) {
+        g_history.current = UiReadStoredState();
+    }
     g_ui = UiWindowState{};
     g_uiNav = UiNavTrail{};
     g_ui.light = UiLightTheme();
@@ -44279,6 +45923,47 @@ Grid BuildSettingsRoot() {
     scroller.Content(content);
     Grid::SetRow(scroller, 2);
     pageGrid.Children().Append(scroller);
+    // Readings: the header of the zone row being scrolled through stays at
+    // the top while its readings and options scroll under it.
+    {
+        Border sticky;
+        Grid::SetRow(sticky, 2);
+        sticky.VerticalAlignment(VerticalAlignment::Top);
+        sticky.HorizontalAlignment(HorizontalAlignment::Center);
+        sticky.Margin(Thickness{24, 0, 32, 0});
+        sticky.Padding(Thickness{14, 6, 14, 6});
+        sticky.CornerRadius({0, 0, 6, 6});
+        sticky.BorderThickness(Thickness{1, 0, 1, 1});
+        sticky.Visibility(Visibility::Collapsed);
+        auto words = UiText(L"", 13, 600, 0.9, true);
+        sticky.Child(words);
+        sticky.Tapped([](IInspectable const&,
+                         winrt::Windows::UI::Xaml::Input::TappedRoutedEventArgs const&) {
+            try {
+                // Back up to the top of that zone's row.
+                if (!g_ui.scroller || !g_ui.stickyKind) return;
+                for (const auto& slot : g_ui.slots) {
+                    if (slot.kind != *g_ui.stickyKind || !slot.area) continue;
+                    double top = slot.area.TransformToVisual(g_ui.scroller)
+                                     .TransformPoint({0, 0}).Y;
+                    g_ui.scroller.ChangeView(
+                        nullptr, g_ui.scroller.VerticalOffset() + top - 8,
+                        nullptr, false);
+                }
+            } catch (...) {
+            }
+        });
+        pageGrid.Children().Append(sticky);
+        g_ui.sticky = sticky;
+        g_ui.stickyText = words;
+    }
+    scroller.ViewChanged([](IInspectable const&,
+                            ScrollViewerViewChangedEventArgs const&) {
+        try {
+            UiUpdateStickyZone();
+        } catch (...) {
+        }
+    });
     g_ui.pageGrid = pageGrid;
     g_ui.content = content;
     g_ui.scroller = scroller;
